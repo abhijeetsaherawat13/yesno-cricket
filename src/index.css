@@ -1,0 +1,6 @@
+@import 'tailwindcss';
+@import './styles/prototype.css';
+
+#root {
+  min-height: 100vh;
+}

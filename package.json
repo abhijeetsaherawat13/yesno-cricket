@@ -1,0 +1,56 @@
+{
+  "name": "yesno-web-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "dev:full": "concurrently \"npm:server\" \"npm:dev\"",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "server": "node server/index.mjs",
+    "start": "SERVE_FRONTEND=true node server/index.mjs",
+    "start:prod": "SERVE_FRONTEND=true node server/index.mjs",
+    "live": "npm run build && npm run start:prod"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.95.2",
+    "autoprefixer": "^10.4.24",
+    "cheerio": "^1.2.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.4",
+    "express": "^5.2.1",
+    "express-rate-limit": "^7.5.0",
+    "pino": "^9.6.0",
+    "pino-http": "^10.4.0",
+    "postcss": "^8.5.6",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.13.0",
+    "socket.io": "^4.8.0",
+    "socket.io-client": "^4.8.0",
+    "supabase": "^2.76.4",
+    "tailwindcss": "^4.1.18",
+    "zustand": "^5.0.11"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vite": "^7.2.4"
+  }
+}
