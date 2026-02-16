@@ -908,9 +908,10 @@ function buildSyntheticMatchesFromOddsPairs(oddsPairs) {
   return [...dedupedPairs.values()].map((pair) => buildSyntheticMatchFromOddsPair(pair))
 }
 
-async function fetchJson(url, timeoutMs = 20_000) {
+async function fetchJson(url, timeoutMs = 20_000, label = 'unknown') {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const startTime = Date.now()
 
   try {
     const response = await fetch(url, {
@@ -920,12 +921,28 @@ async function fetchJson(url, timeoutMs = 20_000) {
       },
     })
 
+    const duration = Date.now() - startTime
+
     if (!response.ok) {
+      logger.warn({ label, url: url.split('?')[0], status: response.status, duration }, 'API returned non-OK status')
       return null
     }
 
-    return await response.json()
-  } catch {
+    const data = await response.json()
+    logger.debug({ label, url: url.split('?')[0], status: response.status, duration }, 'API call succeeded')
+    return data
+  } catch (err) {
+    const duration = Date.now() - startTime
+    const isTimeout = err.name === 'AbortError'
+
+    logger.error({
+      label,
+      url: url.split('?')[0],
+      error: err.message,
+      isTimeout,
+      duration
+    }, isTimeout ? 'API call timed out' : 'API call failed')
+
     return null
   } finally {
     clearTimeout(timer)
@@ -941,10 +958,11 @@ async function fetchCricapiRows(endpoint) {
   url.searchParams.set('apikey', CRICKETDATA_API_KEY)
   url.searchParams.set('offset', '0')
 
-  const payload = asRecord(await fetchJson(url.toString(), 25_000))
+  const payload = asRecord(await fetchJson(url.toString(), 25_000, `cricapi_${endpoint}`))
   const status = asString(payload.status).toLowerCase()
 
   if (status !== 'success') {
+    logger.warn({ endpoint, status }, 'CricAPI returned non-success status')
     return []
   }
 
@@ -1045,7 +1063,7 @@ async function fetchTheOddsSports() {
   const url = new URL('https://api.the-odds-api.com/v4/sports/')
   url.searchParams.set('apiKey', ODDS_API_KEY)
 
-  const payload = asArray(await fetchJson(url.toString()))
+  const payload = asArray(await fetchJson(url.toString(), 10_000, 'theodds_sports'))
   return payload
     .map((entry) => asString(asRecord(entry).key))
     .filter((key) => key.startsWith('cricket_'))
@@ -1130,7 +1148,7 @@ async function fetchTheOddsPairs() {
       url.searchParams.set('oddsFormat', 'decimal')
       url.searchParams.set('dateFormat', 'iso')
 
-      const payload = asArray(await fetchJson(url.toString(), 10_000))
+      const payload = asArray(await fetchJson(url.toString(), 10_000, `theodds_${sportKey}`))
       return payload
         .map((event) => parseTheOddsPair(asRecord(event)))
         .filter((pair) => pair !== null)
@@ -1562,6 +1580,7 @@ async function fetchDcricEventDetail(eventId) {
   const url = `${DCRIC99_EVENT_DETAIL_URL}/${encodeURIComponent(safeEventId)}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 15_000)
+  const startTime = Date.now()
 
   try {
     const response = await fetch(url, {
@@ -1575,13 +1594,28 @@ async function fetchDcricEventDetail(eventId) {
       body: '{}',
     })
 
+    const duration = Date.now() - startTime
+
     if (!response.ok) {
+      logger.warn({ label: 'dcric99_event_detail', eventId: safeEventId, status: response.status, duration }, 'API returned non-OK status')
       return null
     }
 
     const payload = asRecord(await response.json().catch(() => null))
+    logger.debug({ label: 'dcric99_event_detail', eventId: safeEventId, status: response.status, duration }, 'API call succeeded')
     return asRecord(payload.data)
-  } catch {
+  } catch (err) {
+    const duration = Date.now() - startTime
+    const isTimeout = err.name === 'AbortError'
+
+    logger.error({
+      label: 'dcric99_event_detail',
+      eventId: safeEventId,
+      error: err.message,
+      isTimeout,
+      duration
+    }, isTimeout ? 'API call timed out' : 'API call failed')
+
     return null
   } finally {
     clearTimeout(timer)
@@ -1600,6 +1634,7 @@ async function fetchDcricOddsRows(baseUrl, marketIds) {
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 15_000)
+  const startTime = Date.now()
 
   try {
     const response = await fetch(`${baseUrl.replace(/\/$/, '')}/ws/getMarketDataNew`, {
@@ -1613,18 +1648,34 @@ async function fetchDcricOddsRows(baseUrl, marketIds) {
       body: requestBody,
     })
 
+    const duration = Date.now() - startTime
+
     if (!response.ok) {
+      logger.warn({ label: 'dcric99_odds', marketCount: marketIds.length, status: response.status, duration }, 'API returned non-OK status')
       return []
     }
 
     const text = await response.text().catch(() => '')
     if (!text) {
+      logger.warn({ label: 'dcric99_odds', marketCount: marketIds.length, duration }, 'API returned empty response')
       return []
     }
 
     const parsed = asArray(JSON.parse(text))
+    logger.debug({ label: 'dcric99_odds', marketCount: marketIds.length, rowsReturned: parsed.length, duration }, 'API call succeeded')
     return parsed.map((row) => asString(row)).filter(Boolean)
-  } catch {
+  } catch (err) {
+    const duration = Date.now() - startTime
+    const isTimeout = err.name === 'AbortError'
+
+    logger.error({
+      label: 'dcric99_odds',
+      marketCount: marketIds.length,
+      error: err.message,
+      isTimeout,
+      duration
+    }, isTimeout ? 'API call timed out' : 'API call failed')
+
     return []
   } finally {
     clearTimeout(timer)
@@ -1715,7 +1766,7 @@ async function fetchDcric99Pairs(matches) {
     return []
   }
 
-  const eventListPayload = asRecord(await fetchJson(DCRIC99_EVENT_LIST_URL, 15_000))
+  const eventListPayload = asRecord(await fetchJson(DCRIC99_EVENT_LIST_URL, 15_000, 'dcric99_event_list'))
   const eventRows = asArray(asRecord(eventListPayload.data).events)
     .map(asRecord)
     .filter((row) => asNumber(row.event_type_id, 0) === 4)
@@ -1832,14 +1883,26 @@ function parseScraperPair(entry, providerName) {
 }
 
 async function fetchScraperPairsFromSite(config) {
+  const startTime = Date.now()
+
   const response = await fetch(config.url, {
     headers: {
       'user-agent': 'yesno-gateway-scraper/1.0',
       accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
     },
-  }).catch(() => null)
+  }).catch((err) => {
+    logger.warn({ label: 'scraper', site: config.name, error: err.message }, 'Scraper fetch failed')
+    return null
+  })
 
-  if (!response || !response.ok) {
+  const duration = Date.now() - startTime
+
+  if (!response) {
+    return []
+  }
+
+  if (!response.ok) {
+    logger.warn({ label: 'scraper', site: config.name, status: response.status, duration }, 'Scraper returned non-OK status')
     return []
   }
 
@@ -1847,7 +1910,7 @@ async function fetchScraperPairsFromSite(config) {
     const payload = asRecord(await response.json().catch(() => ({})))
     const rows = asArray(readPath(payload, config.eventsPath))
 
-    return rows
+    const pairs = rows
       .map((row) => {
         const event = asRecord(row)
         return parseScraperPair(
@@ -1861,10 +1924,14 @@ async function fetchScraperPairsFromSite(config) {
         )
       })
       .filter((pair) => pair !== null)
+
+    logger.debug({ label: 'scraper', site: config.name, pairs: pairs.length, duration }, 'Scraper completed')
+    return pairs
   }
 
   const html = await response.text().catch(() => '')
   if (!html) {
+    logger.warn({ label: 'scraper', site: config.name, duration }, 'Scraper returned empty HTML')
     return []
   }
 
@@ -1883,6 +1950,7 @@ async function fetchScraperPairsFromSite(config) {
     }
   })
 
+  logger.debug({ label: 'scraper', site: config.name, pairs: pairs.length, duration }, 'Scraper completed')
   return pairs
 }
 
@@ -1901,7 +1969,14 @@ async function fetchExternalOddsPairs(matches) {
     fetchTheOddsPairs(),
     fetchScraperPairs(),
   ])
-  return [...dcric99Pairs, ...theOddsPairs, ...scraperPairs]
+  return {
+    pairs: [...dcric99Pairs, ...theOddsPairs, ...scraperPairs],
+    counts: {
+      dcric99: dcric99Pairs.length,
+      theodds: theOddsPairs.length,
+      scraper: scraperPairs.length,
+    },
+  }
 }
 
 function seededPrice(base, salt, min = 5, max = 95) {
@@ -2072,30 +2147,35 @@ function marketKey(matchId, marketId, optionLabel, side) {
 
 function appendHistoryPoint(key, price) {
   const existing = state.historyByMarketKey.get(key) ?? []
-  const next = [
-    ...existing,
-    {
-      at: nowIso(),
-      price,
-    },
-  ]
+  const point = { at: nowIso(), price }
+  const next = [...existing, point]
 
   if (next.length > MARKET_HISTORY_LIMIT) {
     next.splice(0, next.length - MARKET_HISTORY_LIMIT)
   }
 
   state.historyByMarketKey.set(key, next)
+
+  return { market_key: key, price, recorded_at: point.at }
 }
 
 function appendMarketHistory(match, markets) {
+  const rows = []
   for (const market of markets) {
     for (const option of market.options) {
       const yesKey = marketKey(match.id, market.id, option.label, 'yes')
-      appendHistoryPoint(yesKey, option.price)
+      rows.push(appendHistoryPoint(yesKey, option.price))
 
       const noKey = marketKey(match.id, market.id, option.label, 'no')
-      appendHistoryPoint(noKey, clampPrice(100 - option.price))
+      rows.push(appendHistoryPoint(noKey, clampPrice(100 - option.price)))
     }
+  }
+
+  // Persist to Supabase (fire-and-forget for performance)
+  if (supabaseAdmin && rows.length > 0) {
+    supabaseAdmin.from('server_price_history').insert(rows).then(({ error }) => {
+      if (error) logger.warn({ error, count: rows.length }, 'Failed to persist price history')
+    })
   }
 }
 
@@ -2116,21 +2196,158 @@ function appendAudit(type, details) {
   trimAuditLogs()
 }
 
+/**
+ * Create a fresh user object with default values.
+ */
+function createDefaultUser(safeUserId) {
+  return {
+    userId: safeUserId,
+    balance: STARTING_BALANCE,
+    heldBalance: 0,
+    suspended: false,
+    name: null,
+    email: null,
+    kycStatus: 'pending',
+    kycPan: null,
+    kycAadhaar: null,
+    kycBankAccount: null,
+    kycIfsc: null,
+    kycHolderName: null,
+    settings: { notifications: true, sounds: true, biometric: false },
+    createdAt: nowIso(),
+    lastSeenAt: nowIso(),
+  }
+}
+
+/**
+ * Populate user object from Supabase row data.
+ */
+function populateUserFromDb(user, data) {
+  user.balance = data.balance ?? STARTING_BALANCE
+  user.name = data.name ?? null
+  user.email = data.email ?? null
+  user.kycStatus = data.kyc_status ?? 'pending'
+  user.kycPan = data.kyc_pan ?? null
+  user.kycAadhaar = data.kyc_aadhaar ?? null
+  user.kycBankAccount = data.kyc_bank_account ?? null
+  user.kycIfsc = data.kyc_ifsc ?? null
+  user.kycHolderName = data.kyc_holder_name ?? null
+  user.settings = data.settings ?? { notifications: true, sounds: true, biometric: false }
+}
+
+/**
+ * Async version that properly awaits Supabase load.
+ * Use this in endpoints that need fresh data from DB (like portfolio).
+ */
+async function ensureUserAsync(userId) {
+  const safeUserId = String(userId || 'guest').trim() || 'guest'
+  let user = state.users.get(safeUserId)
+  let isNewUser = false
+
+  if (!user) {
+    user = createDefaultUser(safeUserId)
+    state.users.set(safeUserId, user)
+    state.positionsByUser.set(safeUserId, [])
+    isNewUser = true
+  }
+
+  // Only load from Supabase for NEW users (first time seen in memory)
+  // This prevents race conditions where DB reload overwrites in-flight balance changes
+  if (supabaseAdmin && isNewUser) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('server_wallets')
+        .select('*')
+        .eq('user_id', safeUserId)
+        .maybeSingle()
+
+      if (error) {
+        logger.error({ err: error, userId: safeUserId }, 'Failed to load user from Supabase')
+      } else if (data) {
+        // Existing user in DB - restore their data
+        populateUserFromDb(user, data)
+        logger.info({ userId: safeUserId, balance: user.balance }, 'User data loaded from Supabase')
+      } else {
+        // New user - create in Supabase (upsert to handle race conditions)
+        const { error: upsertError } = await supabaseAdmin
+          .from('server_wallets')
+          .upsert({
+            user_id: safeUserId,
+            balance: STARTING_BALANCE,
+            bonus_balance: 0,
+            held_balance: 0,
+            kyc_status: 'pending',
+            settings: { notifications: true, sounds: true, biometric: false },
+            updated_at: nowIso(),
+          }, { onConflict: 'user_id', ignoreDuplicates: true })
+
+        if (upsertError) {
+          logger.error({ err: upsertError, userId: safeUserId }, 'Failed to upsert new user wallet to Supabase')
+        } else {
+          logger.info({ userId: safeUserId }, 'New user wallet created in Supabase')
+        }
+      }
+    } catch (err) {
+      logger.error({ err, userId: safeUserId }, 'Failed to check user in Supabase')
+    }
+  }
+
+  user.lastSeenAt = nowIso()
+  return user
+}
+
+/**
+ * Sync version for places where we don't need to wait for DB.
+ * Note: This may return stale data. Use ensureUserAsync for authoritative data.
+ */
 function ensureUser(userId) {
   const safeUserId = String(userId || 'guest').trim() || 'guest'
   let user = state.users.get(safeUserId)
 
   if (!user) {
-    user = {
-      userId: safeUserId,
-      balance: STARTING_BALANCE,
-      heldBalance: 0,
-      suspended: false,
-      createdAt: nowIso(),
-      lastSeenAt: nowIso(),
-    }
+    user = createDefaultUser(safeUserId)
     state.users.set(safeUserId, user)
     state.positionsByUser.set(safeUserId, [])
+
+    // Fire-and-forget load from Supabase (for background sync)
+    if (supabaseAdmin) {
+      supabaseAdmin
+        .from('server_wallets')
+        .select('*')
+        .eq('user_id', safeUserId)
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (error) {
+            logger.error({ err: error, userId: safeUserId }, 'Failed to load user from Supabase')
+            return
+          }
+
+          if (data) {
+            populateUserFromDb(user, data)
+            logger.info({ userId: safeUserId }, 'User profile restored from Supabase (async)')
+          } else {
+            supabaseAdmin
+              .from('server_wallets')
+              .upsert({
+                user_id: safeUserId,
+                balance: STARTING_BALANCE,
+                bonus_balance: 0,
+                held_balance: 0,
+                kyc_status: 'pending',
+                settings: { notifications: true, sounds: true, biometric: false },
+                updated_at: nowIso(),
+              }, { onConflict: 'user_id', ignoreDuplicates: true })
+              .then(({ error }) => {
+                if (error) {
+                  logger.error({ err: error, userId: safeUserId }, 'Failed to upsert new user wallet to Supabase')
+                } else {
+                  logger.info({ userId: safeUserId }, 'New user wallet created in Supabase')
+                }
+              })
+          }
+        })
+        .catch((err) => logger.error({ err, userId: safeUserId }, 'Failed to check user in Supabase'))
+    }
   }
 
   user.lastSeenAt = nowIso()
@@ -2171,7 +2388,7 @@ function findMarketOption(matchId, marketId, optionLabel) {
   const normalizedOption = normalizeTeamName(optionLabel)
   const option =
     market.options.find((entry) => normalizeTeamName(entry.label) === normalizedOption) ??
-    market.options.find((entry) => tokenOverlap(entry.label, optionLabel) >= 0.5)
+    market.options.find((entry) => tokenOverlap(entry.label, optionLabel) >= 0.7)
 
   if (!option) {
     return null
@@ -2493,6 +2710,7 @@ function settleMatch(matchId, winnerLabel, actor = 'system') {
       io.to(`user:${affectedUserId}`).emit('portfolio:update', {
         balance: affectedUser?.balance ?? 0,
         positions: getUserPositions(affectedUserId),
+        exposure: getUserOpenExposure(affectedUserId),
       })
     }
   }
@@ -2578,25 +2796,34 @@ async function refreshGateway() {
   }
 
   refreshPromise = (async () => {
+    const refreshStartTime = Date.now()
+
     if (!CRICKETDATA_API_KEY) {
       state.stale = true
       state.feedSource = 'missing_cricket_api_key'
+      logger.warn({ feedSource: 'missing_cricket_api_key' }, 'Gateway refresh skipped - no CricAPI key')
       return
     }
 
     const cricketMatches = await fetchCricketMatches()
-    const oddsPairs = await fetchExternalOddsPairs(cricketMatches)
+    const oddsResult = await fetchExternalOddsPairs(cricketMatches)
+    const oddsPairs = oddsResult.pairs
+    const oddsCounts = oddsResult.counts
     const matches =
       cricketMatches.length > 0 ? cricketMatches : buildSyntheticMatchesFromOddsPairs(oddsPairs)
     const { pricedMatches, feedSource } = applyPricing(matches, oddsPairs)
     const sortedMatches = pricedMatches.sort((left, right) => Number(right.isLive) - Number(left.isLive))
 
     if (sortedMatches.length === 0) {
+      const duration = Date.now() - refreshStartTime
+
       if (state.matches.length > 0) {
         state.stale = true
         state.feedSource = `${feedSource}_cache`
+        logger.warn({ feedSource: `${feedSource}_cache`, matchCount: 0, stale: true, oddsSources: oddsCounts, duration }, 'Gateway refresh empty - using cache')
         appendAudit('gateway_refresh_empty_kept_cache', {
           previousMatches: state.matches.length,
+          oddsSources: oddsCounts,
         })
         return
       }
@@ -2605,6 +2832,7 @@ async function refreshGateway() {
       state.fetchedAt = Date.now()
       state.stale = true
       state.feedSource = `${feedSource}_empty`
+      logger.warn({ feedSource: `${feedSource}_empty`, matchCount: 0, stale: true, oddsSources: oddsCounts, duration }, 'Gateway refresh empty - no cache')
       return
     }
 
@@ -2642,6 +2870,21 @@ async function refreshGateway() {
 
       io.to('admin').emit('admin:overview', { overview: buildAdminOverview() })
     }
+
+    const duration = Date.now() - refreshStartTime
+    logger.info({
+      feedSource,
+      matchCount: sortedMatches.length,
+      stale: false,
+      oddsSources: oddsCounts,
+      duration,
+    }, 'Gateway refresh completed')
+
+    appendAudit('gateway_refresh', {
+      feedSource,
+      matchCount: sortedMatches.length,
+      oddsSources: oddsCounts,
+    })
 
     autoSettleResolvedMatches()
   })()
@@ -2895,25 +3138,33 @@ app.get('/api/live/history', async (req, res) => {
 
 app.get('/api/trades/portfolio', requireAuth, async (req, res) => {
   const userId = req.authenticatedUserId
-  const user = ensureUser(userId)
 
-  // Try to sync balance from Supabase (authoritative source)
+  // Use async version to properly await Supabase load
+  const user = await ensureUserAsync(userId)
+  let transactions = []
+
+  // Fetch transactions from Supabase
   if (supabaseAdmin) {
     try {
-      const { data: wallet, error } = await supabaseAdmin
-        .from('wallet_accounts')
-        .select('balance, bonus_balance, held_balance')
+      const { data: txns, error: txnError } = await supabaseAdmin
+        .from('server_wallet_transactions')
+        .select('id, type, amount, description, icon, created_at')
         .eq('user_id', userId)
-        .maybeSingle()
+        .order('created_at', { ascending: false })
+        .limit(50)
 
-      if (!error && wallet) {
-        // Update in-memory state with DB values
-        user.balance = Number(wallet.balance) || user.balance
-        user.bonusBalance = Number(wallet.bonus_balance) || 0
-        user.heldBalance = Number(wallet.held_balance) || 0
+      if (!txnError && txns) {
+        transactions = txns.map((t) => ({
+          id: t.id,
+          type: t.type,
+          amount: t.amount,
+          description: t.description,
+          icon: t.icon,
+          timestamp: t.created_at,
+        }))
       }
     } catch (err) {
-      logger.error({ err, userId }, 'Failed to sync wallet from Supabase, using in-memory state')
+      logger.error({ err, userId }, 'Failed to fetch transactions from Supabase')
     }
   }
 
@@ -2922,11 +3173,92 @@ app.get('/api/trades/portfolio', requireAuth, async (req, res) => {
     user: {
       userId: user.userId,
       balance: user.balance,
+      name: user.name,
+      email: user.email,
+      kycStatus: user.kycStatus,
+      kycPan: user.kycPan,
+      kycAadhaar: user.kycAadhaar,
+      kycBankAccount: user.kycBankAccount,
+      kycIfsc: user.kycIfsc,
+      kycHolderName: user.kycHolderName,
+      settings: user.settings,
       suspended: user.suspended,
       exposure: getUserOpenExposure(user.userId),
     },
     positions: getUserPositions(user.userId),
+    transactions,
   })
+})
+
+// ── Profile Update ─────────────────────────────────────────────
+app.post('/api/user/profile', requireAuth, async (req, res) => {
+  const userId = req.authenticatedUserId
+  const { name, email, settings } = asRecord(req.body)
+
+  // Use async version to get fresh user data first
+  const user = await ensureUserAsync(userId)
+  if (name !== undefined) user.name = name
+  if (email !== undefined) user.email = email
+  if (settings !== undefined) user.settings = settings
+
+  if (supabaseAdmin) {
+    try {
+      await supabaseAdmin
+        .from('server_wallets')
+        .upsert({
+          user_id: userId,
+          balance: user.balance,
+          name: user.name,
+          email: user.email,
+          settings: user.settings,
+          kyc_status: user.kycStatus,
+          updated_at: nowIso(),
+        }, { onConflict: 'user_id' })
+      logger.info({ userId }, 'User profile updated in Supabase')
+    } catch (err) {
+      logger.error({ err, userId }, 'Failed to persist profile to Supabase')
+    }
+  }
+
+  res.json({ ok: true })
+})
+
+// ── KYC Update ─────────────────────────────────────────────
+app.post('/api/user/kyc', requireAuth, async (req, res) => {
+  const userId = req.authenticatedUserId
+  const { pan, aadhaar, bankAccount, ifsc, holderName, status } = asRecord(req.body)
+
+  // Use async version to get fresh user data first
+  const user = await ensureUserAsync(userId)
+  if (pan) user.kycPan = pan
+  if (aadhaar) user.kycAadhaar = aadhaar
+  if (bankAccount) user.kycBankAccount = bankAccount
+  if (ifsc) user.kycIfsc = ifsc
+  if (holderName) user.kycHolderName = holderName
+  if (status) user.kycStatus = status
+
+  if (supabaseAdmin) {
+    try {
+      await supabaseAdmin
+        .from('server_wallets')
+        .upsert({
+          user_id: userId,
+          balance: user.balance,
+          kyc_status: user.kycStatus,
+          kyc_pan: user.kycPan,
+          kyc_aadhaar: user.kycAadhaar,
+          kyc_bank_account: user.kycBankAccount,
+          kyc_ifsc: user.kycIfsc,
+          kyc_holder_name: user.kycHolderName,
+          updated_at: nowIso(),
+        }, { onConflict: 'user_id' })
+      logger.info({ userId }, 'User KYC updated in Supabase')
+    } catch (err) {
+      logger.error({ err, userId }, 'Failed to persist KYC to Supabase')
+    }
+  }
+
+  res.json({ ok: true })
 })
 
 // ── Leaderboard ─────────────────────────────────────────────
@@ -3007,7 +3339,7 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
     return res.status(400).json({ ok: false, error: 'amount must be a positive number', code: 'INVALID_AMOUNT' })
   }
 
-  const user = ensureUser(userId)
+  const user = await ensureUserAsync(userId)
   if (user.suspended) {
     res.status(403).json({ ok: false, error: 'User is suspended from trading', code: 'USER_SUSPENDED' })
     return
@@ -3032,7 +3364,8 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
   }
 
   const livePrice = side === 'yes' ? marketOption.option.price : clampPrice(100 - marketOption.option.price)
-  const shares = Math.floor(amount / (livePrice / 100))
+  // Use exact shares (2 decimal places) to avoid rounding losses on sell
+  const shares = Math.round((amount / (livePrice / 100)) * 100) / 100
 
   if (shares <= 0) {
     res.status(400).json({ ok: false, error: 'Amount too low for current price', code: 'AMOUNT_TOO_LOW' })
@@ -3067,10 +3400,13 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
     return
   }
 
+  // Capture original state for rollback
+  const originalBalance = user.balance
+
   user.balance -= requiredStake
 
   const position = {
-    id: Date.now(),
+    id: Date.now() + Math.floor(Math.random() * 10000),
     userId: user.userId,
     matchId,
     matchLabel: `${match.teamA} vs ${match.teamB}`,
@@ -3092,7 +3428,7 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
   positions.unshift(position)
   state.positionsByUser.set(user.userId, positions)
 
-  state.orders.unshift({
+  const order = {
     id: `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     userId: user.userId,
     matchId,
@@ -3102,7 +3438,8 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
     amount: requiredStake,
     price: livePrice,
     at: nowIso(),
-  })
+  }
+  state.orders.unshift(order)
 
   appendAudit('order_placed', {
     userId: user.userId,
@@ -3113,55 +3450,77 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
     shares,
   })
 
-  // Persist to Supabase (async, non-blocking)
+  // Persist to Supabase with rollback on failure
   if (supabaseAdmin) {
-    Promise.all([
-      // Insert order record
-      supabaseAdmin.from('all_orders').insert({
-        user_id: user.userId,
-        match_id: matchId,
-        market_id: marketId,
-        option_label: marketOption.option.label,
-        side,
-        shares,
-        price: livePrice,
-        cost: requiredStake,
-      }),
-      // Insert position record (using server_positions for text user IDs)
-      supabaseAdmin.from('server_positions').insert({
-        user_id: user.userId,
-        match_id: matchId,
-        match_label: position.matchLabel,
-        market_title: marketTitle,
-        option_label: marketOption.option.label,
-        side,
-        shares,
-        avg_price: livePrice,
-        cost: requiredStake,
-        potential_payout: shares,
-        status: 'open',
-        is_live: match.isLive,
-      }),
-      // Update wallet balance (using server_wallets for text user IDs)
-      supabaseAdmin
-        .from('server_wallets')
-        .upsert({
+    try {
+      const [orderResult, positionResult, walletResult] = await Promise.all([
+        // Insert order record
+        supabaseAdmin.from('all_orders').insert({
           user_id: user.userId,
-          balance: user.balance,
-          bonus_balance: 0,
-          held_balance: 0,
+          match_id: matchId,
+          market_id: marketId,
+          option_label: marketOption.option.label,
+          side,
+          shares,
+          price: livePrice,
+          cost: requiredStake,
         }),
-      // Insert wallet transaction (using server_wallet_transactions for text user IDs)
+        // Insert position record (using server_positions for text user IDs)
+        supabaseAdmin.from('server_positions').insert({
+          user_id: user.userId,
+          match_id: matchId,
+          match_label: position.matchLabel,
+          market_title: marketTitle,
+          option_label: marketOption.option.label,
+          side,
+          shares,
+          avg_price: livePrice,
+          cost: requiredStake,
+          potential_payout: shares,
+          status: 'open',
+          is_live: match.isLive,
+        }).select('id').single(),
+        // Update wallet balance and profile (using server_wallets for text user IDs)
+        supabaseAdmin
+          .from('server_wallets')
+          .update({
+            balance: user.balance,
+            name: user.name,
+            email: user.email,
+            updated_at: nowIso(),
+          })
+          .eq('user_id', user.userId),
+      ])
+
+      // Store DB ID if available
+      if (positionResult.data?.id) {
+        position.dbId = positionResult.data.id
+      }
+
+      // Check for errors
+      if (orderResult.error || positionResult.error || walletResult.error) {
+        throw new Error('DB write failed')
+      }
+
+      // Insert wallet transaction (non-critical, fire-and-forget)
       supabaseAdmin.from('server_wallet_transactions').insert({
         user_id: user.userId,
         type: 'debit',
         amount: requiredStake,
         description: `Bought ${marketOption.option.label} ${side.toUpperCase()}`,
         icon: '📉',
-      }),
-    ]).catch((err) => {
-      logger.error({ err, userId: user.userId, matchId, marketId }, 'Failed to persist trade to Supabase')
-    })
+      }).catch(() => {})
+    } catch (err) {
+      // Rollback in-memory state
+      logger.error({ err, userId: user.userId, matchId, marketId }, 'Failed to persist trade to Supabase, rolling back')
+      user.balance = originalBalance
+      const idx = positions.indexOf(position)
+      if (idx >= 0) positions.splice(idx, 1)
+      const orderIdx = state.orders.indexOf(order)
+      if (orderIdx >= 0) state.orders.splice(orderIdx, 1)
+
+      return res.status(500).json({ ok: false, error: 'Trade failed to save, please try again', code: 'PERSIST_FAILED' })
+    }
   }
 
   res.json({
@@ -3180,6 +3539,7 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
     io.to(`user:${user.userId}`).emit('portfolio:update', {
       balance: user.balance,
       positions: getUserPositions(user.userId),
+      exposure: getUserOpenExposure(user.userId),
     })
   }
 })
@@ -3195,7 +3555,14 @@ app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res
     return
   }
 
-  const user = ensureUser(userId)
+  const user = await ensureUserAsync(userId)
+
+  // Note: Unlike buy, we allow suspended users to close positions (exit-only mode)
+  // But we log this for auditing
+  if (user.suspended) {
+    logger.info({ userId }, 'Suspended user closing position (allowed for exit-only)')
+  }
+
   const positions = getUserPositions(user.userId)
   const position = positions.find((entry) => entry.id === positionId)
 
@@ -3226,16 +3593,24 @@ app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res
       ? marketOption.option.price
       : clampPrice(100 - marketOption.option.price)
 
-  const closeValue = sharesToClose * (livePrice / 100)
-  const proportionalStake = position.stakeRemaining * (sharesToClose / position.sharesRemaining)
-  const pnl = closeValue - proportionalStake
+  // Round all monetary values to 2 decimal places
+  const closeValue = Math.round(sharesToClose * (livePrice / 100) * 100) / 100
+  const proportionalStake = Math.round(position.stakeRemaining * (sharesToClose / position.sharesRemaining) * 100) / 100
+  const pnl = Math.round((closeValue - proportionalStake) * 100) / 100
 
-  user.balance += closeValue
+  // Capture original state for rollback
+  const originalBalance = user.balance
+  const originalSharesRemaining = position.sharesRemaining
+  const originalStakeRemaining = position.stakeRemaining
+  const originalStatus = position.status
+  const originalClosedAt = position.closedAt
 
-  position.sharesRemaining -= sharesToClose
-  position.stakeRemaining -= proportionalStake
+  user.balance = Math.round((user.balance + closeValue) * 100) / 100
 
-  if (position.sharesRemaining <= 0) {
+  position.sharesRemaining = Math.round((position.sharesRemaining - sharesToClose) * 100) / 100
+  position.stakeRemaining = Math.round((position.stakeRemaining - proportionalStake) * 100) / 100
+
+  if (position.sharesRemaining <= 0.01) {
     position.status = 'closed'
     position.closedAt = nowIso()
   }
@@ -3248,39 +3623,67 @@ app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res
     pnl,
   })
 
-  // Persist to Supabase (async, non-blocking)
+  // Persist to Supabase with rollback on failure
   if (supabaseAdmin) {
-    Promise.all([
-      // Update position in database (find by user_id and match criteria since in-memory ID differs)
-      supabaseAdmin
-        .from('server_positions')
-        .update({
-          shares: position.sharesRemaining,
-          cost: position.stakeRemaining,
-          status: position.status,
-          closed_at: position.closedAt || null,
-        })
+    // Build position update query - use dbId if available for precise targeting
+    let positionUpdate = supabaseAdmin
+      .from('server_positions')
+      .update({
+        shares: position.sharesRemaining,
+        cost: position.stakeRemaining,
+        status: position.status,
+        closed_at: position.closedAt || null,
+      })
+    if (position.dbId) {
+      positionUpdate = positionUpdate.eq('id', position.dbId)
+    } else {
+      // Fallback: match by user + match criteria (may update multiple if duplicates exist)
+      positionUpdate = positionUpdate
         .eq('user_id', user.userId)
         .eq('match_id', position.matchId)
         .eq('option_label', position.optionLabel)
         .eq('side', position.side)
-        .eq('status', 'open'),
-      // Update wallet balance
-      supabaseAdmin
-        .from('server_wallets')
-        .update({ balance: user.balance })
-        .eq('user_id', user.userId),
-      // Insert wallet transaction
+        .eq('status', 'open')
+    }
+
+    try {
+      const [positionResult, walletResult] = await Promise.all([
+        positionUpdate,
+        // Update wallet balance and profile
+        supabaseAdmin
+          .from('server_wallets')
+          .update({
+            balance: user.balance,
+            name: user.name,
+            email: user.email,
+            updated_at: nowIso(),
+          })
+          .eq('user_id', user.userId),
+      ])
+
+      if (positionResult.error || walletResult.error) {
+        throw new Error('DB write failed')
+      }
+
+      // Insert wallet transaction (non-critical, fire-and-forget)
       supabaseAdmin.from('server_wallet_transactions').insert({
         user_id: user.userId,
         type: 'credit',
         amount: closeValue,
         description: `Sold ${sharesToClose} shares of ${position.optionLabel}`,
         icon: pnl >= 0 ? '📈' : '📉',
-      }),
-    ]).catch((err) => {
-      logger.error({ err, userId: user.userId, positionId }, 'Failed to persist position close to Supabase')
-    })
+      }).catch(() => {})
+    } catch (err) {
+      // Rollback in-memory state
+      logger.error({ err, userId: user.userId, positionId }, 'Failed to persist position close to Supabase, rolling back')
+      user.balance = originalBalance
+      position.sharesRemaining = originalSharesRemaining
+      position.stakeRemaining = originalStakeRemaining
+      position.status = originalStatus
+      position.closedAt = originalClosedAt
+
+      return res.status(500).json({ ok: false, error: 'Position close failed to save, please try again', code: 'PERSIST_FAILED' })
+    }
   }
 
   res.json({
@@ -3291,6 +3694,8 @@ app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res
       closeValue,
       pnl,
       balance: user.balance,
+      positions: getUserPositions(userId),
+      exposure: getUserOpenExposure(userId),
     },
   })
 
@@ -3299,6 +3704,7 @@ app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res
     io.to(`user:${userId}`).emit('portfolio:update', {
       balance: user.balance,
       positions: getUserPositions(userId),
+      exposure: getUserOpenExposure(userId),
     })
   }
 })
@@ -3329,7 +3735,7 @@ app.post('/api/withdrawals', requireAuth, async (req, res) => {
   try {
     // Check wallet from Supabase
     const { data: wallet, error: walletError } = await supabaseAdmin
-      .from('wallet_accounts')
+      .from('server_wallets')
       .select('balance, bonus_balance, held_balance')
       .eq('user_id', userId)
       .single()
@@ -3371,7 +3777,7 @@ app.post('/api/withdrawals', requireAuth, async (req, res) => {
 
     // Hold the funds
     const { error: holdError } = await supabaseAdmin
-      .from('wallet_accounts')
+      .from('server_wallets')
       .update({ held_balance: wallet.held_balance + amount })
       .eq('user_id', userId)
 
@@ -3389,7 +3795,7 @@ app.post('/api/withdrawals', requireAuth, async (req, res) => {
 
     if (insertError) {
       // Rollback hold
-      await supabaseAdmin.from('wallet_accounts')
+      await supabaseAdmin.from('server_wallets')
         .update({ held_balance: Math.max(0, wallet.held_balance) })
         .eq('user_id', userId)
       logger.error({ insertError, userId, amount }, 'Failed to create withdrawal request')
@@ -3466,7 +3872,7 @@ app.post('/api/admin/withdrawals/:requestId/approve', requireAdmin, async (req, 
 
     // Get wallet
     const { data: wallet } = await supabaseAdmin
-      .from('wallet_accounts')
+      .from('server_wallets')
       .select('balance, held_balance')
       .eq('user_id', request.user_id)
       .single()
@@ -3477,7 +3883,7 @@ app.post('/api/admin/withdrawals/:requestId/approve', requireAdmin, async (req, 
 
     // Deduct from balance and release hold
     await supabaseAdmin
-      .from('wallet_accounts')
+      .from('server_wallets')
       .update({
         balance: Math.max(0, wallet.balance - request.amount),
         held_balance: Math.max(0, wallet.held_balance - request.amount),
@@ -3547,14 +3953,14 @@ app.post('/api/admin/withdrawals/:requestId/reject', requireAdmin, async (req, r
 
     // Release hold
     const { data: wallet } = await supabaseAdmin
-      .from('wallet_accounts')
+      .from('server_wallets')
       .select('held_balance')
       .eq('user_id', request.user_id)
       .single()
 
     if (wallet) {
       await supabaseAdmin
-        .from('wallet_accounts')
+        .from('server_wallets')
         .update({ held_balance: Math.max(0, wallet.held_balance - request.amount) })
         .eq('user_id', request.user_id)
     }
@@ -3831,6 +4237,25 @@ async function bootstrapFromSupabase() {
         state.settlementsByMatch.set(dbSettlement.match_id, settlement)
       }
       logger.info(`Restored ${settlements.length} match settlement(s)`)
+    }
+
+    // 4. Restore recent price history (last 4 hours)
+    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString()
+    const { data: historyRows, error: historyError } = await supabaseAdmin
+      .from('server_price_history')
+      .select('market_key, price, recorded_at')
+      .gte('recorded_at', fourHoursAgo)
+      .order('recorded_at', { ascending: true })
+
+    if (historyError) {
+      logger.error({ error: historyError }, 'Failed to load price history from Supabase')
+    } else if (historyRows) {
+      for (const row of historyRows) {
+        const existing = state.historyByMarketKey.get(row.market_key) ?? []
+        existing.push({ at: row.recorded_at, price: row.price })
+        state.historyByMarketKey.set(row.market_key, existing)
+      }
+      logger.info(`Restored ${historyRows.length} price history point(s)`)
     }
 
     logger.info('Bootstrap from Supabase completed successfully')

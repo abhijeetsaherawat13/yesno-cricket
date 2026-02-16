@@ -8,6 +8,7 @@ import {
   syncKycComplete,
   syncProfile,
 } from '../services/backend'
+import { saveGatewayKyc, saveGatewayProfile } from '../services/gateway'
 import { useAppStore } from '../store/useAppStore'
 import type { Position } from '../types/app'
 
@@ -172,6 +173,10 @@ export function EditProfilePage() {
 
       void (async () => {
         try {
+          // Save to gateway server (persists to Supabase)
+          await saveGatewayProfile({ userId: user?.phone ?? '', name, email })
+
+          // Also sync via legacy path if available
           await syncProfile(name, email)
           const snapshot = await fetchSnapshot()
           if (snapshot) {
@@ -462,6 +467,9 @@ export function KycPage() {
   const [loading, setLoading] = useState(false)
   const [panNumber, setPanNumber] = useState('')
   const [aadhaarNumber, setAadhaarNumber] = useState('')
+  const [bankAccount, setBankAccount] = useState('')
+  const [ifscCode, setIfscCode] = useState('')
+  const [holderName, setHolderName] = useState('')
   const [validationError, setValidationError] = useState('')
 
   const handleSubmit = () => {
@@ -474,6 +482,19 @@ export function KycPage() {
 
       void (async () => {
         try {
+          // Save KYC details to gateway server (persists to Supabase)
+          const kycUserId = useAppStore.getState().user?.phone ?? ''
+          await saveGatewayKyc({
+            userId: kycUserId,
+            pan: panNumber,
+            aadhaar: aadhaarNumber.replace(/\s/g, ''),
+            bankAccount,
+            ifsc: ifscCode,
+            holderName,
+            status: 'verified',
+          })
+
+          // Also sync via legacy path if available
           await syncKycComplete()
           const snapshot = await fetchSnapshot()
           if (snapshot) {
@@ -620,15 +641,34 @@ export function KycPage() {
             <>
               <div className="input-group">
                 <label className="input-label">Account Number</label>
-                <input type="text" className="input-field" placeholder="Enter account number" />
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="Enter account number"
+                  value={bankAccount}
+                  onChange={(e) => setBankAccount(e.target.value)}
+                />
               </div>
               <div className="input-group">
                 <label className="input-label">IFSC Code</label>
-                <input type="text" className="input-field" placeholder="HDFC0001234" maxLength={11} />
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="HDFC0001234"
+                  maxLength={11}
+                  value={ifscCode}
+                  onChange={(e) => setIfscCode(e.target.value.toUpperCase())}
+                />
               </div>
               <div className="input-group">
                 <label className="input-label">Account Holder Name</label>
-                <input type="text" className="input-field" placeholder="As per bank records" />
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="As per bank records"
+                  value={holderName}
+                  onChange={(e) => setHolderName(e.target.value)}
+                />
               </div>
               {loading ? (
                 <div className="loading-spinner" />
@@ -651,6 +691,14 @@ export function SettingsPage() {
   const setSettings = useAppStore((state) => state.setSettings)
   const addToast = useAppStore((state) => state.addToast)
 
+  const handleSettingsChange = (newSettings: Partial<typeof settings>) => {
+    const updatedSettings = { ...settings, ...newSettings }
+    setSettings(newSettings)
+    // Persist to gateway server
+    const userId = useAppStore.getState().user?.phone ?? ''
+    void saveGatewayProfile({ userId, settings: updatedSettings })
+  }
+
   return (
     <div className="screen" style={{ paddingBottom: 20 }}>
       <div className="app-header">
@@ -671,9 +719,9 @@ export function SettingsPage() {
           <ToggleRow
             label="Push Notifications"
             enabled={settings.notifications}
-            onToggle={() => setSettings({ notifications: !settings.notifications })}
+            onToggle={() => handleSettingsChange({ notifications: !settings.notifications })}
           />
-          <ToggleRow label="Sound Effects" enabled={settings.sounds} onToggle={() => setSettings({ sounds: !settings.sounds })} />
+          <ToggleRow label="Sound Effects" enabled={settings.sounds} onToggle={() => handleSettingsChange({ sounds: !settings.sounds })} />
         </div>
 
         <SectionTitle title="Security" />
@@ -682,7 +730,7 @@ export function SettingsPage() {
           <ToggleRow
             label="Biometric Login"
             enabled={settings.biometric}
-            onToggle={() => setSettings({ biometric: !settings.biometric })}
+            onToggle={() => handleSettingsChange({ biometric: !settings.biometric })}
           />
           <div className="toggle-row" style={{ borderBottom: 'none' }}>
             <span className="toggle-label">Change PIN</span>

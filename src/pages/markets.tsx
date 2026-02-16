@@ -291,7 +291,7 @@ export function NotificationsPage() {
               <div className="notif-content">
                 <div className="notif-title">{notification.title}</div>
                 <div className="notif-text">{notification.text}</div>
-                <div className="notif-time">{new Date(notification.timestamp).toLocaleString()}</div>
+                <div className="notif-time">{(() => { const d = new Date(notification.timestamp); return Number.isFinite(d.getTime()) ? d.toLocaleString() : '' })()}</div>
               </div>
             </div>
           ))
@@ -458,6 +458,7 @@ export function GameViewPage() {
   const [markets, setMarkets] = useState(() => buildMarkets(match))
   const [marketsLoading, setMarketsLoading] = useState(true)
   const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([])
+  const [tradesLastFetched, setTradesLastFetched] = useState<Date | null>(null)
 
   useEffect(() => {
     let isCancelled = false
@@ -482,7 +483,10 @@ export function GameViewPage() {
 
     // Fetch recent trades
     void fetchRecentTrades(match.id).then((trades) => {
-      if (!isCancelled) setRecentTrades(trades)
+      if (!isCancelled) {
+        setRecentTrades(trades)
+        setTradesLastFetched(new Date())
+      }
     })
 
     let cleanupMatchSocket: (() => void) | null = null
@@ -503,7 +507,10 @@ export function GameViewPage() {
       intervalId = window.setInterval(() => {
         void refreshMatchAndMarkets()
         void fetchRecentTrades(match.id).then((trades) => {
-          if (!isCancelled) setRecentTrades(trades)
+          if (!isCancelled) {
+            setRecentTrades(trades)
+            setTradesLastFetched(new Date())
+          }
         })
       }, 30_000)
     }
@@ -612,7 +619,14 @@ export function GameViewPage() {
         {/* Trade Tape */}
         {recentTrades.length > 0 ? (
           <>
-            <div className="section-label">📊 Recent Trades</div>
+            <div className="section-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>📊 Recent Trades</span>
+              {tradesLastFetched && (
+                <span style={{ fontSize: 10, color: Date.now() - tradesLastFetched.getTime() > 60000 ? '#d97706' : '#888' }}>
+                  {Date.now() - tradesLastFetched.getTime() > 60000 ? '⚠️ ' : ''}Updated {tradesLastFetched.toLocaleTimeString()}
+                </span>
+              )}
+            </div>
             <div className="market-card" style={{ padding: 0, overflow: 'hidden' }}>
               {recentTrades.map((trade, index) => (
                 <div key={index} className="trade-tape-row">
@@ -641,7 +655,9 @@ export function GameViewPage() {
 
 function formatTradeTime(isoString: string): string {
   try {
-    const diff = Date.now() - new Date(isoString).getTime()
+    const timestamp = new Date(isoString).getTime()
+    if (!Number.isFinite(timestamp)) return ''
+    const diff = Date.now() - timestamp
     const mins = Math.floor(diff / 60000)
     if (mins < 1) return 'now'
     if (mins < 60) return `${mins}m`

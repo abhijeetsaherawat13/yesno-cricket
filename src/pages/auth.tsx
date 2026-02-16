@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { useAppNavigation } from '../hooks/useAppNavigation'
-import { sendOtp, verifyOtp } from '../services/backend'
+import { fetchGatewayPortfolioSnapshot, sendOtp, verifyOtp } from '../services/backend'
 import { useAppStore } from '../store/useAppStore'
 
 export function SplashPage() {
@@ -43,6 +43,10 @@ export function SplashPage() {
 
 export function PhonePage() {
   const appNavigate = useAppNavigation()
+  const updateState = useAppStore((state) => state.updateState)
+  const addTransaction = useAppStore((state) => state.addTransaction)
+  const addNotification = useAppStore((state) => state.addNotification)
+
   const [phone, setPhone] = useState('')
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -51,15 +55,62 @@ export function PhonePage() {
     if (phone.length >= 10) {
       setLoading(true)
       setErrorMessage(null)
-      const response = await sendOtp(phone)
-      setLoading(false)
 
-      if (!response.ok) {
-        setErrorMessage(response.error ?? 'Failed to send OTP.')
-        return
+      try {
+        // Check if user already has data on server
+        const existingPortfolio = await fetchGatewayPortfolioSnapshot(phone)
+
+        if (existingPortfolio && existingPortfolio.balance > 0) {
+          // Returning user - restore their data
+          updateState({
+            isLoggedIn: true,
+            user: {
+              phone,
+              name: existingPortfolio.name ?? `User ${phone.slice(-4)}`,
+              email: existingPortfolio.email ?? undefined,
+            },
+            balance: existingPortfolio.balance,
+            positions: existingPortfolio.positions,
+            transactions: existingPortfolio.transactions,
+            kycStatus: existingPortfolio.kycStatus ?? 'pending',
+            settings: existingPortfolio.settings ?? { notifications: true, sounds: true, biometric: false },
+          })
+
+          addNotification({
+            title: 'Welcome back!',
+            text: `Your balance: Rs ${existingPortfolio.balance}`,
+            icon: '👋',
+          })
+
+          appNavigate('/markets')
+        } else {
+          // New user - give signup bonus
+          updateState({
+            isLoggedIn: true,
+            user: { phone, name: `User ${phone.slice(-4)}` },
+            balance: 100,
+          })
+
+          addTransaction({
+            type: 'credit',
+            amount: 100,
+            description: 'Signup Bonus',
+            icon: '🎁',
+          })
+
+          addNotification({
+            title: 'Welcome!',
+            text: 'Rs 100 bonus added to your wallet',
+            icon: '🎉',
+          })
+
+          appNavigate('/auth/success')
+        }
+      } catch {
+        setErrorMessage('Login failed. Please try again.')
       }
 
-      appNavigate('/auth/otp', { phone })
+      setLoading(false)
     }
   }
 
@@ -86,7 +137,7 @@ export function PhonePage() {
               />
             </div>
             <button className="btn-primary" onClick={handleSubmit} disabled={phone.length < 10 || loading}>
-              SEND OTP
+              {loading ? 'LOGGING IN...' : 'LOGIN'}
             </button>
             {errorMessage ? <div className="alert-box alert-error">{errorMessage}</div> : null}
             <p style={{ fontSize: 11, color: '#999', marginTop: 16, textAlign: 'center', lineHeight: 1.4 }}>

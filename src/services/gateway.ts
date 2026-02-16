@@ -223,10 +223,27 @@ interface GatewayPortfolioResponse extends GatewayEnvelope {
   user?: {
     userId: string
     balance: number
+    name?: string | null
+    email?: string | null
+    kycStatus?: string | null
+    kycPan?: string | null
+    kycAadhaar?: string | null
+    kycBankAccount?: string | null
+    kycIfsc?: string | null
+    kycHolderName?: string | null
+    settings?: { notifications: boolean; sounds: boolean; biometric: boolean } | null
     suspended: boolean
     exposure: number
   }
   positions?: Array<Record<string, unknown>>
+  transactions?: Array<{
+    id: number
+    type: string
+    amount: number
+    description: string
+    icon: string
+    timestamp: string
+  }>
 }
 
 export async function fetchGatewayPortfolio(userId: string): Promise<GatewayPortfolioResponse | null> {
@@ -413,4 +430,35 @@ export async function fetchLeaderboard(): Promise<LeaderboardEntry[] | null> {
     return null
   }
   return payload.leaderboard ?? []
+}
+
+// ============================================================
+// Profile & KYC APIs
+// ============================================================
+
+export async function saveGatewayProfile(data: {
+  userId: string
+  name?: string
+  email?: string
+  settings?: { notifications: boolean; sounds: boolean; biometric: boolean }
+}): Promise<GatewayEnvelope | null> {
+  return fetchGateway<GatewayEnvelope>('/api/user/profile', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function saveGatewayKyc(data: {
+  userId: string
+  pan?: string
+  aadhaar?: string
+  bankAccount?: string
+  ifsc?: string
+  holderName?: string
+  status?: string
+}): Promise<GatewayEnvelope | null> {
+  return fetchGateway<GatewayEnvelope>('/api/user/kyc', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
 }

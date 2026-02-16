@@ -588,7 +588,14 @@ export async function syncBuyTrade({ position, amount, userId }: BuySyncInput): 
   return {}
 }
 
-export async function syncSellTrade({ positionId, sellShares, userId }: SellSyncInput) {
+export interface SellResult {
+  closeValue: number
+  pnl: number
+  balance: number
+  closedShares: number
+}
+
+export async function syncSellTrade({ positionId, sellShares, userId }: SellSyncInput): Promise<SellResult | null> {
   if (isGatewayEnabled) {
     const payload = await closeGatewayPosition({
       userId: userId ?? `position-${positionId}`,
@@ -600,7 +607,18 @@ export async function syncSellTrade({ positionId, sellShares, userId }: SellSync
       throw new Error(String(payload?.error ?? 'Gateway close rejected.'))
     }
 
-    return
+    // Return the server's actual values
+    const close = (payload as Record<string, unknown>).close as Record<string, unknown> | undefined
+    if (close) {
+      return {
+        closeValue: Number(close.closeValue ?? 0),
+        pnl: Number(close.pnl ?? 0),
+        balance: Number(close.balance ?? 0),
+        closedShares: Number(close.closedShares ?? sellShares),
+      }
+    }
+
+    return null
   }
 
   if (!isSupabaseConfigured) {
@@ -677,12 +695,27 @@ export async function syncKycComplete() {
     .eq('id', userId)
 }
 
+interface GatewayPortfolioSnapshot {
+  balance: number
+  name?: string | null
+  email?: string | null
+  kycStatus?: KycStatus | null
+  kycPan?: string | null
+  kycAadhaar?: string | null
+  kycBankAccount?: string | null
+  kycIfsc?: string | null
+  kycHolderName?: string | null
+  settings?: { notifications: boolean; sounds: boolean; biometric: boolean } | null
+  positions: Position[]
+  transactions: Transaction[]
+}
+
 /**
- * Fetch portfolio (balance + positions) from the gateway server's in-memory state.
+ * Fetch portfolio (balance + positions + transactions) from the gateway server.
  * This is used instead of fetchSnapshot() for gateway mode, because gateway
  * stores positions in-memory (not Supabase).
  */
-export async function fetchGatewayPortfolioSnapshot(userId: string): Promise<{ balance: number; positions: Position[] } | null> {
+export async function fetchGatewayPortfolioSnapshot(userId: string): Promise<GatewayPortfolioSnapshot | null> {
   if (!isGatewayEnabled) return null
 
   const payload = await fetchGatewayPortfolio(userId)
@@ -705,12 +738,32 @@ export async function fetchGatewayPortfolioSnapshot(userId: string): Promise<{ b
     timestamp: String(sp.openedAt ?? new Date().toISOString()),
     outcome: (sp.outcome as 'win' | 'lose' | 'void' | undefined) ?? undefined,
     payout: sp.payout != null ? Number(sp.payout) : undefined,
-    settledAt: sp.closedAt ? String(sp.closedAt) : undefined,
+    settledAt: sp.settledAt ? String(sp.settledAt) : sp.closedAt ? String(sp.closedAt) : undefined,
   }))
 
+  const transactions: Transaction[] = (payload.transactions ?? []).map((t) => ({
+    id: t.id,
+    type: t.type as 'credit' | 'debit',
+    amount: t.amount,
+    description: t.description,
+    icon: t.icon,
+    timestamp: t.timestamp,
+  }))
+
+  const user = payload.user
   return {
-    balance: payload.user?.balance ?? 0,
+    balance: user?.balance ?? 0,
+    name: user?.name,
+    email: user?.email,
+    kycStatus: (user?.kycStatus as KycStatus) ?? null,
+    kycPan: user?.kycPan,
+    kycAadhaar: user?.kycAadhaar,
+    kycBankAccount: user?.kycBankAccount,
+    kycIfsc: user?.kycIfsc,
+    kycHolderName: user?.kycHolderName,
+    settings: user?.settings,
     positions,
+    transactions,
   }
 }
 

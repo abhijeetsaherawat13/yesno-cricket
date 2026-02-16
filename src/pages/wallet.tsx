@@ -338,7 +338,7 @@ export function WalletPage() {
                       </div>
                     </div>
                     <div style={{ fontSize: 11, color: '#888' }}>
-                      {new Date(transaction.timestamp).toLocaleString()}
+                      {(() => { const d = new Date(transaction.timestamp); return Number.isFinite(d.getTime()) ? d.toLocaleString() : 'Unknown' })()}
                     </div>
                   </div>
                 ))}

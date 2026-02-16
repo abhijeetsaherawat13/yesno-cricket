@@ -178,6 +178,7 @@ export interface PositionSettledPayload {
 export interface PortfolioUpdatePayload {
   balance: number
   positions: Position[]
+  exposure?: number
 }
 
 export interface AdminOverviewPayload {

@@ -3,7 +3,7 @@ import { matchesData } from '../data/mockData'
 import { useAppNavigation } from '../hooks/useAppNavigation'
 import { defaultChartSeries, toAreaPoints, toLinePoints } from '../lib/chartUtils'
 import { fetchGatewayPortfolioSnapshot, fetchSnapshot, syncBuyTrade, syncSellTrade } from '../services/backend'
-import { fetchGatewayHistory } from '../services/gateway'
+import { fetchGatewayHistory, fetchGatewayMarkets } from '../services/gateway'
 import { useAppStore } from '../store/useAppStore'
 import type { Position } from '../types/app'
 
@@ -72,7 +72,7 @@ export function BuyPage() {
     }
   }, [buyMode, marketId, match.id, optionLabel, price])
 
-  const shares = Math.floor(amount / (price / 100))
+  const shares = Math.round((amount / (price / 100)) * 100) / 100
   const payout = shares
   const profit = payout - amount
   const profitPct = amount > 0 ? Math.round((profit / amount) * 100) : 0
@@ -93,7 +93,7 @@ export function BuyPage() {
     setSubmitting(true)
 
     const position: Position = {
-      id: Date.now(),
+      id: Date.now() + Math.floor(Math.random() * 10000),
       matchId: match.id,
       marketId,
       match: `${match.teamA} vs ${match.teamB}`,
@@ -453,10 +453,51 @@ export function SellPage() {
   const selectedPosition = routeData.position ?? null
 
   const [sellShares, setSellShares] = useState(() => selectedPosition?.shares ?? 0)
-  const [currentPrice] = useState(() =>
-    selectedPosition ? selectedPosition.avgPrice + Math.floor(Math.random() * 10) - 5 : 0,
-  )
+  const [currentPrice, setCurrentPrice] = useState(() => selectedPosition?.avgPrice ?? 0)
+  const [loadingPrice, setLoadingPrice] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+
+  // Fetch live price on mount
+  useEffect(() => {
+    if (!selectedPosition) {
+      return
+    }
+
+    let isCancelled = false
+
+    const loadLivePrice = async () => {
+      try {
+        const marketsPayload = await fetchGatewayMarkets(selectedPosition.matchId)
+        if (isCancelled || !marketsPayload?.markets) {
+          setLoadingPrice(false)
+          return
+        }
+
+        // Find matching market and option
+        for (const market of marketsPayload.markets) {
+          for (const opt of market.options) {
+            if (opt.label === selectedPosition.option) {
+              const livePrice = selectedPosition.side === 'yes' ? opt.price : 100 - opt.price
+              setCurrentPrice(livePrice)
+              break
+            }
+          }
+        }
+      } catch {
+        // Keep avgPrice as fallback
+      } finally {
+        if (!isCancelled) {
+          setLoadingPrice(false)
+        }
+      }
+    }
+
+    void loadLivePrice()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [selectedPosition])
 
   useEffect(() => {
     if (!selectedPosition) {
@@ -484,20 +525,26 @@ export function SellPage() {
 
     void (async () => {
       try {
-        await syncSellTrade({
+        const result = await syncSellTrade({
           positionId: selectedPosition.id,
           sellShares,
           userId,
         })
 
+        // Use server values if available, otherwise fall back to local estimate
+        const actualCloseValue = result?.closeValue ?? sellValue
+        const actualPnl = result?.pnl ?? pnl
+        const actualBalance = result?.balance ?? balance + actualCloseValue
+
+        // Update state with server-provided balance
         if (remainingShares <= 0) {
           updateState({
-            balance: balance + sellValue,
+            balance: actualBalance,
             positions: positions.filter((item) => item.id !== selectedPosition.id),
           })
         } else {
           updateState({
-            balance: balance + sellValue,
+            balance: actualBalance,
             positions: positions.map((item) =>
               item.id === selectedPosition.id
                 ? {
@@ -512,15 +559,15 @@ export function SellPage() {
 
         addTransaction({
           type: 'credit',
-          amount: sellValue,
+          amount: actualCloseValue,
           description: `Sold ${sellShares} shares of ${selectedPosition.option}`,
-          icon: '📈',
+          icon: actualPnl >= 0 ? '📈' : '📉',
         })
 
         addNotification({
           title: 'Position Closed!',
-          text: `${pnl >= 0 ? 'Profit' : 'Loss'}: Rs ${Math.abs(pnl).toFixed(2)}`,
-          icon: pnl >= 0 ? '🎉' : '📉',
+          text: `${actualPnl >= 0 ? 'Profit' : 'Loss'}: Rs ${Math.abs(actualPnl).toFixed(2)}`,
+          icon: actualPnl >= 0 ? '🎉' : '📉',
         })
 
         // Sync portfolio from gateway (in-memory) instead of Supabase
@@ -569,7 +616,7 @@ export function SellPage() {
       </div>
 
       <div className="container">
-        <div className="market-card" style={{ borderLeft: `4px solid ${pnl >= 0 ? '#2E7D32' : '#D32F2F'}` }}>
+        <div className="market-card" style={{ borderLeft: `4px solid ${loadingPrice ? '#888' : pnl >= 0 ? '#2E7D32' : '#D32F2F'}` }}>
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>
             {selectedPosition.option} ({selectedPosition.side.toUpperCase()})
           </div>
@@ -594,16 +641,16 @@ export function SellPage() {
                 style={{
                   fontSize: 24,
                   fontWeight: 700,
-                  color: currentPrice > selectedPosition.avgPrice ? '#00C853' : '#D32F2F',
+                  color: loadingPrice ? '#888' : currentPrice > selectedPosition.avgPrice ? '#00C853' : '#D32F2F',
                 }}
               >
-                {currentPrice}p
+                {loadingPrice ? '...' : `${currentPrice}p`}
               </div>
             </div>
             <div>
               <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Unrealized P&L</div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: pnl >= 0 ? '#00C853' : '#D32F2F' }}>
-                {pnl >= 0 ? '+' : ''}Rs {pnl.toFixed(2)}
+              <div style={{ fontSize: 24, fontWeight: 700, color: loadingPrice ? '#888' : pnl >= 0 ? '#00C853' : '#D32F2F' }}>
+                {loadingPrice ? '...' : `${pnl >= 0 ? '+' : ''}Rs ${pnl.toFixed(2)}`}
               </div>
             </div>
           </div>
