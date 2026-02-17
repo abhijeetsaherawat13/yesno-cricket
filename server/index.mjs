@@ -3501,6 +3501,7 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
           user_id: user.userId,
           match_id: matchId,
           match_label: position.matchLabel,
+          market_id: marketId,
           market_title: marketTitle,
           option_label: marketOption.option.label,
           side,
@@ -3597,10 +3598,11 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
 app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res) => {
   const payload = asRecord(req.body)
   const userId = req.authenticatedUserId
-  const positionId = Number(req.params.positionId)
+  const rawPositionId = req.params.positionId
+  const positionIdNum = Number(rawPositionId)
   const sharesToClose = Number(payload.shares)
 
-  if (!Number.isFinite(positionId) || !Number.isFinite(sharesToClose) || sharesToClose <= 0) {
+  if (!rawPositionId || !Number.isFinite(sharesToClose) || sharesToClose <= 0) {
     res.status(400).json({ ok: false, error: 'Invalid close request', code: 'INVALID_CLOSE_REQUEST' })
     return
   }
@@ -3614,7 +3616,12 @@ app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res
   }
 
   const positions = getUserPositions(user.userId)
-  const position = positions.find((entry) => entry.id === positionId)
+  // Support both numeric IDs (legacy timestamp-based) and DB IDs (could be int or UUID)
+  const position = positions.find((entry) =>
+    entry.id === positionIdNum ||
+    entry.id === rawPositionId ||
+    String(entry.id) === rawPositionId
+  )
 
   if (!position || position.status !== 'open') {
     res.status(404).json({ ok: false, error: 'Open position not found', code: 'POSITION_NOT_FOUND' })
@@ -3667,7 +3674,7 @@ app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res
 
   appendAudit('position_closed', {
     userId: user.userId,
-    positionId,
+    positionId: position.id,
     sharesToClose,
     livePrice,
     pnl,
@@ -4159,6 +4166,137 @@ app.get('/api/admin/audit', requireAdmin, (req, res) => {
   })
 })
 
+// Force-refresh a user from DB (clears in-memory cache)
+app.post('/api/admin/user/:userId/refresh', requireAdmin, async (req, res) => {
+  const userId = String(req.params.userId).trim()
+
+  if (!userId) {
+    return res.status(400).json({ ok: false, error: 'userId is required' })
+  }
+
+  // Clear from in-memory cache
+  const hadUser = state.users.has(userId)
+  const hadPositions = state.positionsByUser.has(userId)
+  state.users.delete(userId)
+  state.positionsByUser.delete(userId)
+
+  // Reload from DB
+  if (supabaseAdmin) {
+    try {
+      // Load user wallet
+      const { data: walletData, error: walletError } = await supabaseAdmin
+        .from('server_wallets')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle()
+
+      if (walletError) {
+        logger.error({ err: walletError, userId }, 'Failed to reload user wallet from DB')
+      }
+
+      let user = null
+      if (walletData) {
+        user = createDefaultUser(userId)
+        populateUserFromDb(user, walletData)
+        state.users.set(userId, user)
+      }
+
+      // Load user positions
+      const { data: positionsData, error: positionsError } = await supabaseAdmin
+        .from('server_positions')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('status', 'open')
+
+      if (positionsError) {
+        logger.error({ err: positionsError, userId }, 'Failed to reload user positions from DB')
+      }
+
+      const restoredPositions = []
+      if (positionsData) {
+        for (const dbPosition of positionsData) {
+          const match = state.matches.find((m) => m.id === dbPosition.match_id)
+          const position = {
+            id: dbPosition.id,
+            dbId: dbPosition.id,
+            userId: dbPosition.user_id,
+            matchId: dbPosition.match_id,
+            matchLabel: dbPosition.match_label,
+            marketId: dbPosition.market_id ?? 1,
+            marketTitle: dbPosition.market_title,
+            optionLabel: dbPosition.option_label,
+            side: dbPosition.side,
+            avgPrice: Number(dbPosition.avg_price),
+            shares: Number(dbPosition.shares),
+            sharesRemaining: Number(dbPosition.shares),
+            stake: Number(dbPosition.cost),
+            stakeRemaining: Number(dbPosition.cost),
+            status: 'open',
+            isLive: match?.isLive ?? false,
+            openedAt: dbPosition.created_at,
+          }
+          restoredPositions.push(position)
+        }
+        state.positionsByUser.set(userId, restoredPositions)
+      }
+
+      appendAudit('admin_user_refresh', { userId, hadUser, hadPositions, reloadedBalance: user?.balance, reloadedPositions: restoredPositions.length })
+
+      return res.json({
+        ok: true,
+        userId,
+        clearedFromCache: hadUser || hadPositions,
+        reloadedFromDb: !!walletData,
+        balance: user?.balance ?? null,
+        positionsCount: restoredPositions.length,
+      })
+    } catch (err) {
+      logger.error({ err, userId }, 'Failed to refresh user from DB')
+      return res.status(500).json({ ok: false, error: 'Failed to refresh user' })
+    }
+  }
+
+  return res.json({
+    ok: true,
+    userId,
+    clearedFromCache: hadUser || hadPositions,
+    reloadedFromDb: false,
+    message: 'No Supabase connection - only cleared from memory',
+  })
+})
+
+// Delete a user completely (from memory and optionally DB)
+app.delete('/api/admin/user/:userId', requireAdmin, async (req, res) => {
+  const userId = String(req.params.userId).trim()
+  const deleteFromDb = req.query.db === 'true'
+
+  if (!userId) {
+    return res.status(400).json({ ok: false, error: 'userId is required' })
+  }
+
+  // Clear from in-memory cache
+  state.users.delete(userId)
+  state.positionsByUser.delete(userId)
+
+  if (deleteFromDb && supabaseAdmin) {
+    try {
+      await Promise.all([
+        supabaseAdmin.from('server_wallets').delete().eq('user_id', userId),
+        supabaseAdmin.from('server_positions').delete().eq('user_id', userId),
+        supabaseAdmin.from('server_wallet_transactions').delete().eq('user_id', userId),
+      ])
+      appendAudit('admin_user_deleted', { userId, fromDb: true })
+      return res.json({ ok: true, userId, deletedFromDb: true })
+    } catch (err) {
+      logger.error({ err, userId }, 'Failed to delete user from DB')
+      return res.status(500).json({ ok: false, error: 'Failed to delete from DB' })
+    }
+  }
+
+  appendAudit('admin_user_deleted', { userId, fromDb: false })
+  return res.json({ ok: true, userId, deletedFromDb: false, message: 'Cleared from memory only' })
+})
+
 if (SERVE_FRONTEND) {
   app.use((req, res, next) => {
     const method = String(req.method ?? '').toUpperCase()
@@ -4240,12 +4378,14 @@ async function bootstrapFromSupabase() {
         const match = state.matches.find((m) => m.id === dbPosition.match_id)
 
         // Convert DB position to in-memory format
+        // Use DB id as position id so frontend references stay valid across restarts
         const position = {
-          id: Date.now() + Math.floor(Math.random() * 10000), // Generate new in-memory ID
+          id: dbPosition.id,
+          dbId: dbPosition.id,
           userId: dbPosition.user_id,
           matchId: dbPosition.match_id,
           matchLabel: dbPosition.match_label,
-          marketId: 1, // Default to market 1 (match winner) for now
+          marketId: dbPosition.market_id ?? 1,
           marketTitle: dbPosition.market_title,
           optionLabel: dbPosition.option_label,
           side: dbPosition.side,
