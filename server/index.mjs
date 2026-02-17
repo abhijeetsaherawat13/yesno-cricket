@@ -3524,8 +3524,9 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
           .eq('user_id', user.userId),
       ])
 
-      // Store DB ID if available
+      // Use DB ID as position ID for consistency across restarts
       if (positionResult.data?.id) {
+        position.id = positionResult.data.id
         position.dbId = positionResult.data.id
       }
 
