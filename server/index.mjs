@@ -2798,14 +2798,12 @@ async function refreshGateway() {
   refreshPromise = (async () => {
     const refreshStartTime = Date.now()
 
-    if (!CRICKETDATA_API_KEY) {
-      state.stale = true
-      state.feedSource = 'missing_cricket_api_key'
-      logger.warn({ feedSource: 'missing_cricket_api_key' }, 'Gateway refresh skipped - no CricAPI key')
-      return
-    }
+    // Allow dcric99 as primary source when CricAPI unavailable/exhausted
+    const cricketMatches = CRICKETDATA_API_KEY ? await fetchCricketMatches() : []
 
-    const cricketMatches = await fetchCricketMatches()
+    if (cricketMatches.length === 0 && !CRICKETDATA_API_KEY) {
+      logger.info({ feedSource: 'dcric99_primary' }, 'No CricAPI key - using dcric99 as primary source')
+    }
     const oddsResult = await fetchExternalOddsPairs(cricketMatches)
     const oddsPairs = oddsResult.pairs
     const oddsCounts = oddsResult.counts

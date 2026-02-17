@@ -622,7 +622,7 @@ export async function syncSellTrade({ positionId, sellShares, userId }: SellSync
   }
 
   if (!isSupabaseConfigured) {
-    return
+    return null
   }
 
   const client = requireSupabase()
@@ -631,6 +631,8 @@ export async function syncSellTrade({ positionId, sellShares, userId }: SellSync
     p_position_id: positionId,
     p_sell_shares: sellShares,
   })
+
+  return null
 }
 
 /** @deprecated V1 — deposits disabled. Kept for potential future use. */
@@ -777,5 +779,25 @@ export async function hydrateFromSession(): Promise<Snapshot | null> {
     return null
   }
 
+  // PERMANENT FIX: Gateway is the source of truth for all user data
+  if (isGatewayEnabled) {
+    const gwData = await fetchGatewayPortfolioSnapshot(userId)
+    if (gwData) {
+      return {
+        user: {
+          phone: userId,
+          name: gwData.name ?? 'User',
+          email: gwData.email ?? undefined,
+        },
+        balance: gwData.balance,
+        kycStatus: gwData.kycStatus ?? 'pending',
+        positions: gwData.positions,
+        transactions: gwData.transactions,
+        notifications: [],
+      }
+    }
+  }
+
+  // Fallback only if gateway unavailable
   return fetchSnapshot()
 }

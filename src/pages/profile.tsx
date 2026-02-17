@@ -3,6 +3,7 @@ import { BottomNav } from '../components/BottomNav'
 import { helpFaqs } from '../data/mockData'
 import { useAppNavigation } from '../hooks/useAppNavigation'
 import {
+  fetchGatewayPortfolioSnapshot,
   fetchSnapshot,
   logoutRemote,
   syncKycComplete,
@@ -173,21 +174,36 @@ export function EditProfilePage() {
 
       void (async () => {
         try {
-          // Save to gateway server (persists to Supabase)
-          await saveGatewayProfile({ userId: user?.phone ?? '', name, email })
+          const userId = user?.phone ?? ''
+          // Save to gateway server (persists to server_wallets)
+          await saveGatewayProfile({ userId, name, email })
 
           // Also sync via legacy path if available
           await syncProfile(name, email)
-          const snapshot = await fetchSnapshot()
-          if (snapshot) {
+
+          // Refresh from gateway (source of truth)
+          const gwPortfolio = await fetchGatewayPortfolioSnapshot(userId)
+          if (gwPortfolio) {
             updateState({
-              user: snapshot.user,
-              balance: snapshot.balance,
-              positions: snapshot.positions,
-              transactions: snapshot.transactions,
-              notifications: snapshot.notifications,
-              kycStatus: snapshot.kycStatus,
+              user: { phone: userId, name: gwPortfolio.name ?? name, email: gwPortfolio.email ?? email },
+              balance: gwPortfolio.balance,
+              positions: gwPortfolio.positions,
+              transactions: gwPortfolio.transactions,
+              kycStatus: gwPortfolio.kycStatus ?? 'pending',
             })
+          } else {
+            // Fallback to old tables only if gateway unavailable
+            const snapshot = await fetchSnapshot()
+            if (snapshot) {
+              updateState({
+                user: snapshot.user,
+                balance: snapshot.balance,
+                positions: snapshot.positions,
+                transactions: snapshot.transactions,
+                notifications: snapshot.notifications,
+                kycStatus: snapshot.kycStatus,
+              })
+            }
           }
         } catch {
           // Keep local state as fallback when remote sync fails.
@@ -482,7 +498,7 @@ export function KycPage() {
 
       void (async () => {
         try {
-          // Save KYC details to gateway server (persists to Supabase)
+          // Save KYC details to gateway server (persists to server_wallets)
           const kycUserId = useAppStore.getState().user?.phone ?? ''
           await saveGatewayKyc({
             userId: kycUserId,
@@ -496,16 +512,30 @@ export function KycPage() {
 
           // Also sync via legacy path if available
           await syncKycComplete()
-          const snapshot = await fetchSnapshot()
-          if (snapshot) {
+
+          // Refresh from gateway (source of truth)
+          const gwPortfolio = await fetchGatewayPortfolioSnapshot(kycUserId)
+          if (gwPortfolio) {
             updateState({
-              user: snapshot.user,
-              balance: snapshot.balance,
-              positions: snapshot.positions,
-              transactions: snapshot.transactions,
-              notifications: snapshot.notifications,
-              kycStatus: snapshot.kycStatus,
+              user: { phone: kycUserId, name: gwPortfolio.name ?? 'User', email: gwPortfolio.email ?? undefined },
+              balance: gwPortfolio.balance,
+              positions: gwPortfolio.positions,
+              transactions: gwPortfolio.transactions,
+              kycStatus: gwPortfolio.kycStatus ?? 'verified',
             })
+          } else {
+            // Fallback to old tables only if gateway unavailable
+            const snapshot = await fetchSnapshot()
+            if (snapshot) {
+              updateState({
+                user: snapshot.user,
+                balance: snapshot.balance,
+                positions: snapshot.positions,
+                transactions: snapshot.transactions,
+                notifications: snapshot.notifications,
+                kycStatus: snapshot.kycStatus,
+              })
+            }
           }
         } catch {
           // Keep local state as fallback when remote sync fails.
