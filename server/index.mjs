@@ -2939,7 +2939,14 @@ async function requireAuth(req, res, next) {
     if (error || !user) {
       return res.status(401).json({ ok: false, error: 'Invalid or expired token', code: 'AUTH_INVALID' })
     }
-    req.authenticatedUserId = user.id
+    // Use phone number as user ID (matches server_wallets.user_id format)
+    // Supabase stores phone in E164 format (+919971452052), strip country code
+    // Fall back to user.id (UUID) if phone not available
+    let userId = user.phone ?? user.id
+    if (userId.startsWith('+91')) {
+      userId = userId.slice(3)
+    }
+    req.authenticatedUserId = userId
     next()
   } catch (err) {
     logger.error({ err }, 'Auth verification failed')
