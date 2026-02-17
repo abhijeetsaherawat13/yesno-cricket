@@ -3559,7 +3559,7 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
         amount: requiredStake,
         description: `Bought ${marketOption.option.label} ${side.toUpperCase()}`,
         icon: '📉',
-      }).catch(() => {})
+      }).then(() => {}, () => {})
     } catch (err) {
       // Rollback in-memory state
       logger.error({ err, userId: user.userId, matchId, marketId }, 'Failed to persist trade to Supabase, rolling back')
@@ -3722,7 +3722,7 @@ app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res
         amount: closeValue,
         description: `Sold ${sharesToClose} shares of ${position.optionLabel}`,
         icon: pnl >= 0 ? '📈' : '📉',
-      }).catch(() => {})
+      }).then(() => {}, () => {})
     } catch (err) {
       // Rollback in-memory state
       logger.error({ err, userId: user.userId, positionId }, 'Failed to persist position close to Supabase, rolling back')
