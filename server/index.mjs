@@ -2937,15 +2937,41 @@ async function requireAuth(req, res, next) {
   try {
     const { data: { user }, error } = await supabaseAdmin.auth.getUser(token)
     if (error || !user) {
+      logger.warn({ error, hasUser: !!user }, 'Auth getUser failed')
       return res.status(401).json({ ok: false, error: 'Invalid or expired token', code: 'AUTH_INVALID' })
     }
+
+    // Diagnostic logging - see where Supabase stores the phone number
+    logger.info({
+      authDiag: true,
+      userId: user.id,
+      phone: user.phone,
+      email: user.email,
+      userMetadata: user.user_metadata,
+      appMetadata: user.app_metadata,
+      identities: user.identities?.map(i => ({ provider: i.provider, identityData: i.identity_data })),
+    }, 'Supabase auth user data')
+
     // Use phone number as user ID (matches server_wallets.user_id format)
-    // Supabase stores phone in E164 format (+919971452052), strip country code
-    // Fall back to user.id (UUID) if phone not available
-    let userId = user.phone ?? user.id
-    if (userId.startsWith('+91')) {
-      userId = userId.slice(3)
+    // Check multiple possible locations for phone:
+    // 1. user.phone (standard for phone OTP)
+    // 2. user.user_metadata.phone (some auth methods)
+    // 3. phone identity data
+    // 4. Fall back to user.id (UUID)
+    const phoneFromIdentity = user.identities?.find(i => i.provider === 'phone')?.identity_data?.phone
+    let userId = user.phone ?? user.user_metadata?.phone ?? phoneFromIdentity ?? user.id
+
+    // Strip country code prefixes
+    if (typeof userId === 'string') {
+      if (userId.startsWith('+91')) {
+        userId = userId.slice(3)
+      } else if (userId.startsWith('91') && userId.length === 12) {
+        userId = userId.slice(2)
+      }
     }
+
+    logger.info({ finalUserId: userId, source: user.phone ? 'phone' : user.user_metadata?.phone ? 'userMetadata' : phoneFromIdentity ? 'identity' : 'uuid' }, 'Auth userId resolved')
+
     req.authenticatedUserId = userId
     next()
   } catch (err) {
@@ -3502,9 +3528,28 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
         position.dbId = positionResult.data.id
       }
 
-      // Check for errors
-      if (orderResult.error || positionResult.error || walletResult.error) {
-        throw new Error('DB write failed')
+      // Check for errors with detailed logging
+      const dbErrors = []
+      if (orderResult.error) {
+        dbErrors.push({ table: 'all_orders', error: orderResult.error })
+      }
+      if (positionResult.error) {
+        dbErrors.push({ table: 'server_positions', error: positionResult.error })
+      }
+      if (walletResult.error) {
+        dbErrors.push({ table: 'server_wallets', error: walletResult.error })
+      }
+
+      if (dbErrors.length > 0) {
+        logger.error({
+          dbErrors,
+          userId: user.userId,
+          matchId,
+          marketId,
+          shares,
+          stake: requiredStake,
+        }, 'Trade DB write failed - detailed errors')
+        throw new Error(`DB write failed: ${dbErrors.map(e => `${e.table}: ${e.error.message || e.error.code || JSON.stringify(e.error)}`).join('; ')}`)
       }
 
       // Insert wallet transaction (non-critical, fire-and-forget)
