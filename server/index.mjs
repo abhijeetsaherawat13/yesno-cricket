@@ -2285,6 +2285,17 @@ async function ensureUserAsync(userId) {
           logger.error({ err: upsertError, userId: safeUserId }, 'Failed to upsert new user wallet to Supabase')
         } else {
           logger.info({ userId: safeUserId }, 'New user wallet created in Supabase')
+          // Insert initial balance transaction for new users
+          const { error: txnError } = await supabaseAdmin.from('server_wallet_transactions').insert({
+            user_id: safeUserId,
+            type: 'credit',
+            amount: STARTING_BALANCE,
+            description: 'Welcome bonus',
+            icon: '🎁',
+          })
+          if (txnError) {
+            logger.warn({ err: txnError, userId: safeUserId }, 'Failed to insert welcome bonus transaction')
+          }
         }
       }
     } catch (err) {
@@ -3554,14 +3565,17 @@ app.post('/api/trades/orders', requireAuth, async (req, res) => {
         throw new Error(`DB write failed: ${dbErrors.map(e => `${e.table}: ${e.error.message || e.error.code || JSON.stringify(e.error)}`).join('; ')}`)
       }
 
-      // Insert wallet transaction (non-critical, fire-and-forget)
-      supabaseAdmin.from('server_wallet_transactions').insert({
+      // Insert wallet transaction (await to ensure consistency)
+      const { error: txnError } = await supabaseAdmin.from('server_wallet_transactions').insert({
         user_id: user.userId,
         type: 'debit',
         amount: requiredStake,
         description: `Bought ${marketOption.option.label} ${side.toUpperCase()}`,
         icon: '📉',
-      }).then(() => {}, () => {})
+      })
+      if (txnError) {
+        logger.warn({ err: txnError, userId: user.userId, amount: requiredStake }, 'Failed to insert trade transaction (non-fatal)')
+      }
     } catch (err) {
       // Rollback in-memory state
       logger.error({ err, userId: user.userId, matchId, marketId }, 'Failed to persist trade to Supabase, rolling back')
@@ -3618,13 +3632,52 @@ app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res
 
   const positions = getUserPositions(user.userId)
   // Support both numeric IDs (legacy timestamp-based) and DB IDs (could be int or UUID)
-  const position = positions.find((entry) =>
+  let position = positions.find((entry) =>
     entry.id === positionIdNum ||
     entry.id === rawPositionId ||
     String(entry.id) === rawPositionId
   )
 
+  // Fallback: query database directly if not found in memory (handles restart ID mismatch)
+  if (!position && supabaseAdmin) {
+    logger.info({ userId: user.userId, positionId: rawPositionId, positionIdNum, memoryCount: positions.length }, 'Position not in memory, checking DB')
+    const { data: dbPos, error: dbErr } = await supabaseAdmin
+      .from('server_positions')
+      .select('*')
+      .eq('user_id', user.userId)
+      .eq('id', positionIdNum)
+      .eq('status', 'open')
+      .maybeSingle()
+
+    if (dbErr) {
+      logger.warn({ err: dbErr, positionId: rawPositionId }, 'DB lookup for position failed')
+    } else if (dbPos) {
+      // Reconstruct position object from DB and add to memory
+      position = {
+        id: dbPos.id,
+        dbId: dbPos.id,
+        oddsId: dbPos.odds_id,
+        userId: dbPos.user_id,
+        matchId: dbPos.match_id,
+        marketId: dbPos.market_id ?? 1,
+        side: dbPos.side,
+        shares: dbPos.shares,
+        sharesRemaining: dbPos.shares_remaining,
+        avgPrice: dbPos.avg_price,
+        stake: dbPos.stake,
+        stakeRemaining: dbPos.stake_remaining,
+        optionLabel: dbPos.option_label,
+        status: dbPos.status,
+        createdAt: dbPos.created_at,
+        closedAt: dbPos.closed_at,
+      }
+      positions.push(position)
+      logger.info({ positionId: dbPos.id, matchId: dbPos.match_id }, 'Position recovered from DB (memory miss)')
+    }
+  }
+
   if (!position || position.status !== 'open') {
+    logger.warn({ userId: user.userId, positionId: rawPositionId, positionIdNum, memoryPositionIds: positions.map(p => p.id) }, 'Position not found after DB fallback')
     res.status(404).json({ ok: false, error: 'Open position not found', code: 'POSITION_NOT_FOUND' })
     return
   }
@@ -3723,14 +3776,17 @@ app.post('/api/trades/positions/:positionId/close', requireAuth, async (req, res
         throw new Error('DB write failed')
       }
 
-      // Insert wallet transaction (non-critical, fire-and-forget)
-      supabaseAdmin.from('server_wallet_transactions').insert({
+      // Insert wallet transaction (await to ensure consistency)
+      const { error: txnError } = await supabaseAdmin.from('server_wallet_transactions').insert({
         user_id: user.userId,
         type: 'credit',
         amount: closeValue,
         description: `Sold ${sharesToClose} shares of ${position.optionLabel}`,
         icon: pnl >= 0 ? '📈' : '📉',
-      }).then(() => {}, () => {})
+      })
+      if (txnError) {
+        logger.warn({ err: txnError, userId: user.userId, amount: closeValue }, 'Failed to insert close transaction (non-fatal)')
+      }
     } catch (err) {
       // Rollback in-memory state
       logger.error({ err, userId: user.userId, positionId }, 'Failed to persist position close to Supabase, rolling back')
@@ -3955,7 +4011,7 @@ app.post('/api/admin/withdrawals/:requestId/approve', requireAdmin, async (req, 
       .eq('id', requestId)
 
     // Add wallet transaction record
-    await supabaseAdmin.from('wallet_transactions').insert({
+    await supabaseAdmin.from('server_wallet_transactions').insert({
       user_id: request.user_id,
       type: 'debit',
       amount: request.amount,
