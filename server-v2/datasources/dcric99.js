@@ -3,9 +3,9 @@ import { log } from '../lib/logger.js';
 
 // Configuration
 const DCRIC99_ENABLED = process.env.DCRIC99_ENABLED !== 'false';
-const DCRIC99_EVENT_LIST_URL = process.env.DCRIC99_EVENT_LIST_URL || 'https://ex.dcric99.com/api/exchange/sports/events';
-const DCRIC99_EVENT_DETAIL_URL = process.env.DCRIC99_EVENT_DETAIL_URL || 'https://ex.dcric99.com/api/exchange/event-by-id';
-const DCRIC99_DEFAULT_ODDS_BASE_URL = process.env.DCRIC99_ODDS_BASE_URL || 'https://odds.1ex.in';
+const DCRIC99_EVENT_LIST_URL = process.env.DCRIC99_EVENT_LIST_URL || 'https://api.dcric99.com/api/guest/event_list';
+const DCRIC99_EVENT_DETAIL_URL = process.env.DCRIC99_EVENT_DETAIL_URL || 'https://api.dcric99.com/api/guest/event';
+const DCRIC99_DEFAULT_ODDS_BASE_URL = process.env.DCRIC99_ODDS_BASE_URL || 'https://api.dcric99.com';
 const DCRIC99_MAX_EVENTS = parseInt(process.env.DCRIC99_MAX_EVENTS || '15', 10);
 const DCRIC99_CONCURRENCY = parseInt(process.env.DCRIC99_CONCURRENCY || '5', 10);
 
