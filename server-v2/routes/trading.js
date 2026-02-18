@@ -107,17 +107,19 @@ function resolveDirection(side, optionLabel, marketData) {
   }
 }
 
-// POST /api/trade or POST /api/trades/orders
-// Execute a trade (buy position)
-router.post('/', requireAuth, async (req, res) => {
+// Shared handler for executing trades
+async function handleExecuteTrade(req, res) {
   try {
     const userId = req.userId;
+
+    log.info(`[Trading] Received trade request: userId=${userId}, body=${JSON.stringify(req.body)}`);
 
     // Normalize request to internal format (handles frontend format conversion)
     let normalized;
     try {
       normalized = normalizeTradeRequest(req.body);
     } catch (err) {
+      log.warn(`[Trading] Normalization failed: ${err.message}`);
       return res.status(400).json({
         ok: false,
         success: false,
@@ -195,7 +197,7 @@ router.post('/', requireAuth, async (req, res) => {
       newBalance: result.newBalance
     });
   } catch (err) {
-    log.error('[Trading] POST / error:', err.message);
+    log.error('[Trading] Execute trade error:', err.message);
 
     // Return specific error messages for known error types
     if (err.message.includes('Insufficient balance')) {
@@ -220,7 +222,11 @@ router.post('/', requireAuth, async (req, res) => {
       error: 'Failed to execute trade'
     });
   }
-});
+}
+
+// POST /api/trade
+// Execute a trade (buy position) - legacy endpoint
+router.post('/', requireAuth, handleExecuteTrade);
 
 // POST /api/trade/close
 // Close a position (sell) - body contains positionId
@@ -309,6 +315,8 @@ router.post('/positions/:positionId/close', requireAuth, async (req, res) => {
     const { positionId } = req.params;
     const { quantity, shares } = req.body; // Accept both 'quantity' and 'shares'
 
+    log.info(`[Trading] Close position request: userId=${userId}, positionId=${positionId}, body=${JSON.stringify(req.body)}`);
+
     // Parse positionId from URL
     const posId = parseInt(positionId, 10);
     if (isNaN(posId)) {
@@ -375,12 +383,8 @@ router.post('/positions/:positionId/close', requireAuth, async (req, res) => {
 });
 
 // POST /api/trades/orders
-// Alias for POST /api/trade (frontend-compatible)
-router.post('/orders', requireAuth, async (req, res, next) => {
-  // Forward to the main trade handler by changing the path
-  req.url = '/';
-  router.handle(req, res, next);
-});
+// Execute a trade (buy position) - frontend endpoint
+router.post('/orders', requireAuth, handleExecuteTrade);
 
 // GET /api/positions
 // Get user's positions
