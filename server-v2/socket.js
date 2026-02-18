@@ -24,13 +24,13 @@ export function initSocket(httpServer) {
       markets: marketService.getAllMarkets()
     });
 
-    // Handle subscription to specific matches
-    socket.on('subscribe', (matchKey) => {
+    // Handle subscription to specific matches (frontend sends 'match:subscribe')
+    socket.on('match:subscribe', (matchKey) => {
       socket.join(`match:${matchKey}`);
       log.debug(`[Socket] ${socket.id} subscribed to ${matchKey}`);
     });
 
-    socket.on('unsubscribe', (matchKey) => {
+    socket.on('match:unsubscribe', (matchKey) => {
       socket.leave(`match:${matchKey}`);
       log.debug(`[Socket] ${socket.id} unsubscribed from ${matchKey}`);
     });
@@ -59,14 +59,32 @@ export function getIO() {
 export function broadcastMarketUpdate(markets) {
   if (!io) return;
 
-  io.emit(SOCKET_EVENTS.MARKET_UPDATE, { markets });
+  // Group markets by matchKey and send to each match room with proper payload
+  const marketsByMatch = new Map();
+  for (const market of markets) {
+    const key = market.matchKey;
+    if (!marketsByMatch.has(key)) marketsByMatch.set(key, []);
+    marketsByMatch.get(key).push(market);
+  }
+
+  for (const [matchKey, matchMarkets] of marketsByMatch) {
+    io.to(`match:${matchKey}`).emit(SOCKET_EVENTS.MARKET_UPDATE, {
+      matchId: matchKey,
+      markets: matchMarkets,
+      tradingStatus: { suspended: false }
+    });
+  }
 }
 
 // Broadcast update for a specific market
 export function broadcastMatchUpdate(matchKey, market) {
   if (!io) return;
 
-  io.to(`match:${matchKey}`).emit(SOCKET_EVENTS.MARKET_UPDATE, { market });
+  io.to(`match:${matchKey}`).emit(SOCKET_EVENTS.MARKET_UPDATE, {
+    matchId: matchKey,
+    markets: Array.isArray(market) ? market : [market],
+    tradingStatus: { suspended: false }
+  });
 }
 
 // Send position update to a specific user

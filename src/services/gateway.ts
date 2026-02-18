@@ -250,6 +250,27 @@ export async function fetchGatewayPortfolio(userId: string): Promise<GatewayPort
   return fetchGateway<GatewayPortfolioResponse>(`/api/trades/portfolio?userId=${encodeURIComponent(userId)}`)
 }
 
+interface CreateUserResponse extends GatewayEnvelope {
+  user?: {
+    id: string
+    name: string
+    phone: string
+    balance: number
+  }
+}
+
+/**
+ * Create or get a user on the server.
+ * Calls /api/auth/verify-otp which creates the user if DISABLE_AUTH_FOR_TESTING=true,
+ * or requires real OTP verification otherwise.
+ */
+export async function createGatewayUser(phone: string): Promise<CreateUserResponse | null> {
+  return fetchGateway<CreateUserResponse>('/api/auth/verify-otp', {
+    method: 'POST',
+    body: JSON.stringify({ phone }),
+  })
+}
+
 export async function placeGatewayOrder(input: {
   userId: string
   matchId: number

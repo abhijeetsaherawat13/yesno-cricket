@@ -37,13 +37,13 @@ export const REFRESH_INTERVALS = {
   PRICE_CLEANUP: 6 * 60 * 60 * 1000  // 6 hours
 };
 
-// Socket.io events
+// Socket.io events (must match frontend expectations)
 export const SOCKET_EVENTS = {
-  MARKET_UPDATE: 'market-update',
-  POSITION_UPDATE: 'position-update',
-  BALANCE_UPDATE: 'balance-update',
-  TRADE_EXECUTED: 'trade-executed',
-  SETTLEMENT: 'settlement'
+  MARKET_UPDATE: 'markets:update',
+  POSITION_UPDATE: 'position:update',
+  BALANCE_UPDATE: 'balance:update',
+  TRADE_EXECUTED: 'trade:confirmed',
+  SETTLEMENT: 'position:settled'
 };
 
 // Price modeling constants

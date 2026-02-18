@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { useAppNavigation } from '../hooks/useAppNavigation'
 import { fetchGatewayPortfolioSnapshot, sendOtp, verifyOtp } from '../services/backend'
+import { createGatewayUser } from '../services/gateway'
 import { useAppStore } from '../store/useAppStore'
 
 export function SplashPage() {
@@ -84,23 +85,28 @@ export function PhonePage() {
 
           appNavigate('/markets')
         } else {
-          // New user - give signup bonus
+          // New user - CREATE ON SERVER FIRST
+          const createResponse = await createGatewayUser(phone)
+
+          const serverBalance = createResponse?.user?.balance ?? 100
+          const serverName = createResponse?.user?.name ?? `User ${phone.slice(-4)}`
+
           updateState({
             isLoggedIn: true,
-            user: { phone, name: `User ${phone.slice(-4)}` },
-            balance: 100,
+            user: { phone, name: serverName },
+            balance: serverBalance,
           })
 
           addTransaction({
             type: 'credit',
-            amount: 100,
+            amount: serverBalance,
             description: 'Signup Bonus',
             icon: '🎁',
           })
 
           addNotification({
             title: 'Welcome!',
-            text: 'Rs 100 bonus added to your wallet',
+            text: `Rs ${serverBalance} bonus added to your wallet`,
             icon: '🎉',
           })
 
