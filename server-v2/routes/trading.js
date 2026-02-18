@@ -219,7 +219,7 @@ async function handleExecuteTrade(req, res) {
     res.status(500).json({
       ok: false,
       success: false,
-      error: 'Failed to execute trade'
+      error: `Failed to execute trade: ${err.message}`
     });
   }
 }
