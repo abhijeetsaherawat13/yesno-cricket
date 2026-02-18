@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { tradingService, userService } from '../services/index.js';
+import { tradingService, userService, marketService } from '../services/index.js';
 import { requireAuth } from './auth.js';
 import { log } from '../lib/logger.js';
 import { MARKET_TYPES } from '../lib/constants.js';
@@ -47,7 +47,33 @@ router.post('/', requireAuth, async (req, res) => {
 
     log.info(`[Trading] Trade executed: user=${userId}, match=${matchKey}, dir=${direction}, qty=${qty}`);
 
+    // Get match info for response
+    const match = marketService.getMarket(matchKey);
+    const marketData = match?.markets?.find(m => m.marketId === marketId) || {};
+    const marketTitle = marketData.name || 'Match Winner';
+    const optionLabel = direction === 'A' ? (marketData.labelA || 'A') : (marketData.labelB || 'B');
+
+    // Return format expected by frontend (backend.ts:542-547)
     res.json({
+      ok: true,
+      order: {
+        position: {
+          id: result.positionId,
+          matchId: match?.eventId || matchKey,
+          matchKey: result.matchKey,
+          marketId: result.marketId,
+          marketTitle: marketTitle,
+          optionLabel: optionLabel,
+          side: direction === 'A' ? 'yes' : 'no',
+          shares: result.quantity,
+          avgPrice: result.avgPrice,
+          stake: result.cost,
+          isLive: match?.isLive ?? true,
+          openedAt: new Date().toISOString()
+        },
+        balance: result.newBalance
+      },
+      // Also include legacy format for backwards compatibility
       success: true,
       trade: {
         positionId: result.positionId,
@@ -90,7 +116,7 @@ router.post('/', requireAuth, async (req, res) => {
 router.post('/close', requireAuth, async (req, res) => {
   try {
     const userId = req.userId;
-    const { positionId, quantity } = req.body;
+    const { positionId, quantity, shares } = req.body; // Accept both 'quantity' and 'shares'
 
     if (!positionId) {
       return res.status(400).json({
@@ -108,7 +134,8 @@ router.post('/close', requireAuth, async (req, res) => {
       });
     }
 
-    const qty = quantity ? parseInt(quantity, 10) : null;
+    const rawQty = quantity ?? shares; // Accept either field name
+    const qty = rawQty ? parseInt(rawQty, 10) : null;
     if (qty !== null && (isNaN(qty) || qty <= 0)) {
       return res.status(400).json({
         success: false,
@@ -169,7 +196,7 @@ router.post('/positions/:positionId/close', requireAuth, async (req, res) => {
   try {
     const userId = req.userId;
     const { positionId } = req.params;
-    const { quantity } = req.body;
+    const { quantity, shares } = req.body; // Accept both 'quantity' and 'shares'
 
     // Parse positionId from URL
     const posId = parseInt(positionId, 10);
@@ -180,7 +207,8 @@ router.post('/positions/:positionId/close', requireAuth, async (req, res) => {
       });
     }
 
-    const qty = quantity ? parseInt(quantity, 10) : null;
+    const rawQty = quantity ?? shares; // Accept either field name
+    const qty = rawQty ? parseInt(rawQty, 10) : null;
     if (qty !== null && (isNaN(qty) || qty <= 0)) {
       return res.status(400).json({
         success: false,
