@@ -39,6 +39,14 @@ function clampPrice(value) {
   return clamp(Math.round(value), 1, 99);
 }
 
+// Generate mock odds when real odds unavailable
+function generateMockOdds() {
+  // Random price between 30-70 for team A
+  const priceA = Math.floor(Math.random() * 40) + 30;
+  const priceB = 100 - priceA;
+  return { priceA, priceB };
+}
+
 function clampProbability(value) {
   return clamp(value, 0.01, 0.99);
 }
@@ -379,49 +387,79 @@ class Dcric99DataSource extends DataSource {
         const eventId = String(entry.event_id || entry.id || '').trim();
         if (!eventId) return null;
 
-        const detailPayload = await fetchEventDetail(eventId);
-        const eventPayload = asRecord(detailPayload?.event);
-        if (Object.keys(eventPayload).length === 0) return null;
-
-        const marketIds = buildMarketIds(eventPayload);
-        if (marketIds.length === 0) return null;
-
-        const oddsHub = asString(detailPayload.odds_hub).replace(/^https?:\/\//, '').trim();
-        const oddsBaseUrl = detailPayload.connect_odds_hub && oddsHub
-          ? `https://${oddsHub}`
-          : DCRIC99_DEFAULT_ODDS_BASE_URL;
-
-        const rows = await fetchOddsRows(oddsBaseUrl, marketIds);
-        if (rows.length === 0) return null;
-
-        const parsedMarkets = parseOddsRows(rows, detailPayload);
-        if (parsedMarkets.length === 0) return null;
-
         const eventName = asString(entry.event_name || entry.name);
-        const pair = pickMatchWinnerPair(detailPayload, parsedMarkets, eventName);
-        if (!pair) return null;
+
+        // Parse team names from event name (e.g., "Lions v Warriors")
+        const teams = parseTeamsFromName(eventName);
+        if (!teams) return null; // Skip tournaments without "vs" in name
+
+        const [teamA, teamB] = teams;
+
+        // Try to get real odds, fall back to mock odds
+        let priceA, priceB;
+        let gotRealOdds = false;
+
+        try {
+          const detailPayload = await fetchEventDetail(eventId);
+          const eventPayload = asRecord(detailPayload?.event);
+
+          if (Object.keys(eventPayload).length > 0) {
+            const marketIds = buildMarketIds(eventPayload);
+
+            if (marketIds.length > 0) {
+              const oddsHub = asString(detailPayload.odds_hub).replace(/^https?:\/\//, '').trim();
+              const oddsBaseUrl = detailPayload.connect_odds_hub && oddsHub
+                ? `https://${oddsHub}`
+                : DCRIC99_DEFAULT_ODDS_BASE_URL;
+
+              const rows = await fetchOddsRows(oddsBaseUrl, marketIds);
+
+              if (rows.length > 0) {
+                const parsedMarkets = parseOddsRows(rows, detailPayload);
+                const pair = pickMatchWinnerPair(detailPayload, parsedMarkets, eventName);
+                if (pair) {
+                  priceA = pair.priceA;
+                  priceB = pair.priceB;
+                  gotRealOdds = true;
+                }
+              }
+            }
+          }
+        } catch (err) {
+          log.warn(`[dcric99] Failed to get odds for ${eventId}: ${err.message}`);
+        }
+
+        // Use mock odds if real odds not available
+        if (!gotRealOdds) {
+          const mock = generateMockOdds();
+          priceA = mock.priceA;
+          priceB = mock.priceB;
+          log.debug(`[dcric99] Using mock odds for ${eventName}: ${priceA}/${priceB}`);
+        }
 
         return {
-          matchKey: generateMatchKey(pair.teamA, pair.teamB),
-          teamA: pair.teamA,
-          teamB: pair.teamB,
-          teamAShort: shortCode(pair.teamA),
-          teamBShort: shortCode(pair.teamB),
+          matchKey: generateMatchKey(teamA, teamB),
+          teamA,
+          teamB,
+          teamAShort: shortCode(teamA),
+          teamBShort: shortCode(teamB),
           matchType: 'Cricket',
           category: 'Cricket',
           statusText: entry.in_play ? 'Live' : 'Upcoming',
           timeLabel: entry.in_play ? 'Now' : 'Upcoming',
           isLive: Boolean(entry.in_play),
-          priceA: pair.priceA,
-          priceB: pair.priceB,
-          provider: 'dcric99',
+          priceA,
+          priceB,
+          provider: gotRealOdds ? 'dcric99' : 'dcric99-mock',
           eventId
         };
       }
     );
 
     const matches = matchPromises.filter(Boolean);
-    log.info(`[dcric99] Fetched ${matches.length} matches with odds`);
+    const realOddsCount = matches.filter(m => m.provider === 'dcric99').length;
+    const mockOddsCount = matches.filter(m => m.provider === 'dcric99-mock').length;
+    log.info(`[dcric99] Fetched ${matches.length} matches (${realOddsCount} real odds, ${mockOddsCount} mock odds)`);
     return matches;
   }
 
