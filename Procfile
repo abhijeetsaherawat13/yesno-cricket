@@ -1,1 +1,1 @@
-web: SERVE_FRONTEND=true node server/index.mjs
+web: node server-v2/index.js
