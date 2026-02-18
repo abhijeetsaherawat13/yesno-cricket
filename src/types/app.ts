@@ -33,6 +33,7 @@ export interface User {
 
 export interface Match {
   id: number
+  matchKey?: string  // Server-v2 uses matchKey for socket rooms and API calls
   teamA: string
   teamB: string
   teamAFull: string

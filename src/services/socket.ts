@@ -128,12 +128,16 @@ export function getSocket(): Socket | null {
 // Room management
 // ============================================================
 
-export function subscribeToMatch(matchId: number): void {
-  socket?.emit('match:subscribe', matchId)
+/**
+ * Subscribe to match updates. Server-v2 uses matchKey (string) for room names,
+ * so if matchKey is provided we use it, otherwise fall back to matchId.
+ */
+export function subscribeToMatch(matchId: number, matchKey?: string): void {
+  socket?.emit('match:subscribe', matchKey ?? matchId)
 }
 
-export function unsubscribeFromMatch(matchId: number): void {
-  socket?.emit('match:unsubscribe', matchId)
+export function unsubscribeFromMatch(matchId: number, matchKey?: string): void {
+  socket?.emit('match:unsubscribe', matchKey ?? matchId)
 }
 
 // ============================================================
@@ -145,7 +149,7 @@ export interface MatchesUpdatePayload {
 }
 
 export interface MarketsUpdatePayload {
-  matchId: number
+  matchId: number | string  // Server-v2 sends matchKey (string), v1 sends number
   markets: GameMarket[]
   tradingStatus: {
     suspended: boolean

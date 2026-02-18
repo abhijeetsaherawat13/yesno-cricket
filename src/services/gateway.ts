@@ -1,5 +1,6 @@
 import type { GameMarket, LeaderboardEntry, Match } from '../types/app'
 import { supabase } from '../lib/supabase'
+import { useAppStore } from '../store/useAppStore'
 
 const rawGatewayUrl = (import.meta.env.VITE_GATEWAY_URL as string | undefined)?.trim() ?? ''
 const GATEWAY_BASE_URL = rawGatewayUrl.replace(/\/$/, '')
@@ -84,18 +85,27 @@ function toGatewayUrl(path: string): string {
 }
 
 async function getAuthHeaders(): Promise<HeadersInit> {
-  if (!supabase) return {}
+  const headers: HeadersInit = {}
 
-  try {
-    const { data: { session } } = await supabase.auth.getSession()
-    if (session?.access_token) {
-      return { authorization: `Bearer ${session.access_token}` }
-    }
-  } catch {
-    // Silently fail — request will go unauthenticated
+  // Add x-user-id header for dev mode auth bypass (DISABLE_AUTH_FOR_TESTING=true)
+  const user = useAppStore.getState().user
+  if (user?.phone) {
+    headers['x-user-id'] = user.phone
   }
 
-  return {}
+  // Also try Supabase session token
+  if (supabase) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`
+      }
+    } catch {
+      // Silently fail — request will go unauthenticated
+    }
+  }
+
+  return headers
 }
 
 async function fetchGateway<T extends GatewayEnvelope>(

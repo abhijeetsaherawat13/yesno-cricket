@@ -516,11 +516,12 @@ export function GameViewPage() {
     }
 
     // Market price subscription (now socket-aware via backend.ts)
+    // Pass matchKey for server-v2 socket rooms (uses matchKey instead of numeric id)
     const unsubscribe = subscribeToMatchMarketPrices(match.id, (updatedMarkets) => {
       if (!isCancelled) {
         setMarkets(updatedMarkets)
       }
-    })
+    }, match.matchKey)
 
     return () => {
       isCancelled = true

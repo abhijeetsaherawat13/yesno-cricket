@@ -433,19 +433,23 @@ export async function fetchMarketsForMatch(match: Match): Promise<GameMarket[]> 
 export function subscribeToMatchMarketPrices(
   matchId: number,
   onUpdate: (updatedMarkets: GameMarket[]) => void,
+  matchKey?: string,
 ): (() => void) {
   // Prefer Socket.io real-time push when connected
   if (isSocketAvailable()) {
-    subscribeToMatch(matchId)
+    subscribeToMatch(matchId, matchKey)
 
     const cleanup = onMarketsUpdate((data) => {
-      if (data.matchId === matchId && data.markets?.length > 0) {
+      // Server-v2 sends matchId as matchKey (string), check both matchKey and matchId
+      const matchesById = data.matchId === matchId
+      const matchesByKey = matchKey && data.matchId === matchKey
+      if ((matchesById || matchesByKey) && data.markets?.length > 0) {
         onUpdate(data.markets)
       }
     })
 
     return () => {
-      unsubscribeFromMatch(matchId)
+      unsubscribeFromMatch(matchId, matchKey)
       cleanup()
     }
   }
