@@ -6,31 +6,139 @@ import { MARKET_TYPES } from '../lib/constants.js';
 
 const router = Router();
 
+// ============================================================================
+// Request Normalization Helpers
+// Frontend sends different format than server expects, so we normalize here
+// ============================================================================
+
+/**
+ * Normalize trade request from frontend format to server format
+ * Frontend sends: { matchId, side, amount, optionLabel }
+ * Server expects: { matchKey, direction, quantity, marketId }
+ */
+function normalizeTradeRequest(body) {
+  // Detect format: frontend has 'side' and 'amount'
+  const isFrontendFormat = 'side' in body || 'amount' in body;
+
+  if (!isFrontendFormat) {
+    // Legacy format - return as-is
+    return {
+      matchKey: body.matchKey,
+      marketId: body.marketId || MARKET_TYPES.MATCH_WINNER,
+      direction: body.direction,
+      quantity: parseInt(body.quantity, 10)
+    };
+  }
+
+  // Frontend format - transform
+  const { matchId, matchKey: providedKey, marketId = MARKET_TYPES.MATCH_WINNER, side, amount, optionLabel } = body;
+
+  // 1. Resolve matchKey from matchId or use provided
+  const matchKey = providedKey || resolveMatchKey(matchId);
+  if (!matchKey) {
+    throw new Error(`Match not found for matchId: ${matchId}`);
+  }
+
+  // 2. Get market data
+  const market = marketService.getMarket(matchKey);
+  if (!market) {
+    throw new Error(`Market not found: ${matchKey}`);
+  }
+
+  const marketData = market.markets?.find(m => m.marketId === marketId) || market;
+
+  // 3. Resolve direction from side + optionLabel
+  const direction = resolveDirection(side, optionLabel, marketData);
+
+  // 4. Calculate quantity from amount and price
+  const price = direction === 'A' ? marketData.priceA : marketData.priceB;
+  const quantity = Math.floor(amount / (price / 100));
+
+  if (quantity <= 0) {
+    throw new Error(`Amount too small. Minimum: Rs ${(price / 100).toFixed(2)}`);
+  }
+
+  log.info(`[Trading] Normalized request: matchId=${matchId} -> matchKey=${matchKey}, side=${side} -> direction=${direction}, amount=${amount} -> quantity=${quantity}`);
+
+  return { matchKey, marketId, direction, quantity };
+}
+
+/**
+ * Resolve matchKey from matchId (which might be eventId or index)
+ */
+function resolveMatchKey(matchId) {
+  if (typeof matchId === 'string' && matchId.includes('-')) {
+    return matchId; // Already a matchKey
+  }
+
+  const allMarkets = marketService.getAllMarkets();
+
+  // Try eventId match first
+  const byEventId = allMarkets.find(m =>
+    m.eventId == matchId || m.matchKey == matchId
+  );
+  if (byEventId) return byEventId.matchKey;
+
+  // Try index-based (for mock data, matchId starts at 1)
+  const idx = parseInt(matchId, 10);
+  if (idx > 0 && idx <= allMarkets.length) {
+    return allMarkets[idx - 1]?.matchKey;
+  }
+
+  return null;
+}
+
+/**
+ * Resolve direction ('A' or 'B') from side ('yes'/'no') and optionLabel
+ */
+function resolveDirection(side, optionLabel, marketData) {
+  const label = (optionLabel || '').toLowerCase();
+  const labelA = (marketData.labelA || '').toLowerCase();
+  const labelB = (marketData.labelB || '').toLowerCase();
+
+  // Match option to team
+  const isTeamA = label === labelA || label.includes(labelA) || labelA.includes(label);
+
+  // yes on A = A, no on A = B, yes on B = B, no on B = A
+  if (side === 'yes') {
+    return isTeamA ? 'A' : 'B';
+  } else {
+    return isTeamA ? 'B' : 'A';
+  }
+}
+
 // POST /api/trade or POST /api/trades/orders
 // Execute a trade (buy position)
 router.post('/', requireAuth, async (req, res) => {
   try {
     const userId = req.userId;
-    const { matchKey, direction, quantity, marketId = MARKET_TYPES.MATCH_WINNER } = req.body;
 
-    // Validate inputs
-    if (!matchKey) {
+    // Normalize request to internal format (handles frontend format conversion)
+    let normalized;
+    try {
+      normalized = normalizeTradeRequest(req.body);
+    } catch (err) {
       return res.status(400).json({
+        ok: false,
         success: false,
-        error: 'matchKey is required'
+        error: err.message
       });
     }
 
-    if (!direction || !['A', 'B'].includes(direction)) {
+    const { matchKey, marketId, direction, quantity } = normalized;
+
+    // Validate normalized values
+    if (!matchKey || !direction || !['A', 'B'].includes(direction)) {
       return res.status(400).json({
+        ok: false,
         success: false,
-        error: 'direction must be "A" or "B"'
+        error: 'Invalid trade parameters'
       });
     }
 
-    const qty = parseInt(quantity, 10);
-    if (!qty || qty <= 0) {
+    if (!quantity || quantity <= 0 || isNaN(quantity)) {
       return res.status(400).json({
+        ok: false,
         success: false,
         error: 'quantity must be a positive integer'
       });
@@ -42,10 +150,10 @@ router.post('/', requireAuth, async (req, res) => {
       matchKey,
       marketId,
       direction,
-      qty
+      quantity
     );
 
-    log.info(`[Trading] Trade executed: user=${userId}, match=${matchKey}, dir=${direction}, qty=${qty}`);
+    log.info(`[Trading] Trade executed: user=${userId}, match=${matchKey}, dir=${direction}, qty=${quantity}`);
 
     // Get match info for response
     const match = marketService.getMarket(matchKey);
@@ -92,6 +200,7 @@ router.post('/', requireAuth, async (req, res) => {
     // Return specific error messages for known error types
     if (err.message.includes('Insufficient balance')) {
       return res.status(400).json({
+        ok: false,
         success: false,
         error: err.message
       });
@@ -99,12 +208,14 @@ router.post('/', requireAuth, async (req, res) => {
 
     if (err.message.includes('Market not found')) {
       return res.status(404).json({
+        ok: false,
         success: false,
         error: err.message
       });
     }
 
     res.status(500).json({
+      ok: false,
       success: false,
       error: 'Failed to execute trade'
     });
