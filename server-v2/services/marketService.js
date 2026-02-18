@@ -110,6 +110,7 @@ function formatMarketForClient(market) {
 
   return {
     matchKey: market.matchKey,
+    eventId: market.eventId, // Include eventId for matchId resolution
     teamA: market.teamA,
     teamB: market.teamB,
     teamAShort: market.teamAShort,

@@ -51,6 +51,9 @@ app.use('/api/trades/portfolio', portfolioRouter);
 // Frontend calls /api/trades/orders for placing trades
 app.use('/api/trades', tradingRouter);
 
+// Frontend calls /api/live/matches for match list
+app.use('/api/live', marketsRouter);
+
 // Legacy route aliases for frontend compatibility
 app.use('/gateway/portfolio', portfolioRouter);
 app.use('/gateway/markets', marketsRouter);
