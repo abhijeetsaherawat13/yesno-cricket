@@ -12,9 +12,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "server": "node server/index.mjs",
-    "start": "SERVE_FRONTEND=true node server/index.mjs",
-    "start:prod": "SERVE_FRONTEND=true node server/index.mjs",
+    "server": "node server-v2/index.js",
+    "start": "node server-v2/index.js",
+    "start:prod": "node server-v2/index.js",
     "live": "npm run build && npm run start:prod"
   },
   "dependencies": {
