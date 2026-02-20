@@ -725,9 +725,23 @@ export async function fetchGatewayPortfolioSnapshot(userId: string): Promise<Gat
   if (!isGatewayEnabled) return null
 
   const payload = await fetchGatewayPortfolio(userId)
-  if (!payload?.ok) return null
+  // Handle both success formats: payload.ok OR payload.success
+  if (!payload?.ok && !(payload as Record<string, unknown>)?.success) return null
 
-  const positions: Position[] = (payload.positions ?? []).map((sp) => ({
+  // Handle both response formats: server-v2 wraps in `portfolio`, legacy has flat structure
+  const portfolioWrapper = (payload as Record<string, unknown>).portfolio as Record<string, unknown> | undefined
+  const rawPositions = (portfolioWrapper?.positions ?? payload.positions ?? []) as Array<Record<string, unknown>>
+  const rawTransactions = (portfolioWrapper?.transactions ?? payload.transactions ?? []) as Array<{
+    id: number
+    type: string
+    amount: number
+    description: string
+    icon: string
+    timestamp: string
+  }>
+  const rawUser = (portfolioWrapper?.user ?? payload.user) as Record<string, unknown> | undefined
+
+  const positions: Position[] = rawPositions.map((sp) => ({
     id: Number(sp.id),
     matchId: Number(sp.matchId),
     marketId: Number(sp.marketId ?? 1),
@@ -747,27 +761,27 @@ export async function fetchGatewayPortfolioSnapshot(userId: string): Promise<Gat
     settledAt: sp.settledAt ? String(sp.settledAt) : sp.closedAt ? String(sp.closedAt) : undefined,
   }))
 
-  const transactions: Transaction[] = (payload.transactions ?? []).map((t) => ({
+  const transactions: Transaction[] = rawTransactions.map((t) => ({
     id: t.id,
     type: t.type as 'credit' | 'debit',
     amount: t.amount,
     description: t.description,
-    icon: t.icon,
-    timestamp: t.timestamp,
+    icon: t.icon ?? '📝',
+    timestamp: t.timestamp ?? new Date().toISOString(),
   }))
 
-  const user = payload.user
+  // Use rawUser which handles both wrapped and flat response formats
   return {
-    balance: user?.balance ?? 0,
-    name: user?.name,
-    email: user?.email,
-    kycStatus: (user?.kycStatus as KycStatus) ?? null,
-    kycPan: user?.kycPan,
-    kycAadhaar: user?.kycAadhaar,
-    kycBankAccount: user?.kycBankAccount,
-    kycIfsc: user?.kycIfsc,
-    kycHolderName: user?.kycHolderName,
-    settings: user?.settings,
+    balance: Number(rawUser?.balance ?? 0),
+    name: rawUser?.name as string | null | undefined,
+    email: rawUser?.email as string | null | undefined,
+    kycStatus: (rawUser?.kycStatus as KycStatus) ?? null,
+    kycPan: rawUser?.kycPan as string | null | undefined,
+    kycAadhaar: rawUser?.kycAadhaar as string | null | undefined,
+    kycBankAccount: rawUser?.kycBankAccount as string | null | undefined,
+    kycIfsc: rawUser?.kycIfsc as string | null | undefined,
+    kycHolderName: rawUser?.kycHolderName as string | null | undefined,
+    settings: rawUser?.settings as { notifications: boolean; sounds: boolean; biometric: boolean } | null | undefined,
     positions,
     transactions,
   }

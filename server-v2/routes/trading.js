@@ -65,6 +65,10 @@ function normalizeTradeRequest(body) {
 
 /**
  * Resolve matchKey from matchId (which might be eventId or index)
+ *
+ * NOTE: The numeric `id` sent to frontend is truncated from the original eventId
+ * (first 9 digits only, see formatMarket in markets.js). So we need to apply
+ * the same truncation when comparing eventId to matchId.
  */
 function resolveMatchKey(matchId) {
   if (typeof matchId === 'string' && matchId.includes('-')) {
@@ -73,10 +77,15 @@ function resolveMatchKey(matchId) {
 
   const allMarkets = marketService.getAllMarkets();
 
-  // Try eventId match first
-  const byEventId = allMarkets.find(m =>
-    m.eventId == matchId || m.matchKey == matchId
-  );
+  // Try matching against truncated eventId (same logic as formatMarket)
+  const byEventId = allMarkets.find(m => {
+    if (m.eventId) {
+      // Apply same truncation as formatMarket: first 9 digits
+      const truncatedEventId = parseInt(String(m.eventId).replace(/\D/g, '').slice(0, 9), 10);
+      if (truncatedEventId == matchId) return true;
+    }
+    return m.matchKey == matchId;
+  });
   if (byEventId) return byEventId.matchKey;
 
   // Try index-based (for mock data, matchId starts at 1)

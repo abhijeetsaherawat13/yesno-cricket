@@ -473,8 +473,8 @@ export async function saveGatewayProfile(data: {
   email?: string
   settings?: { notifications: boolean; sounds: boolean; biometric: boolean }
 }): Promise<GatewayEnvelope | null> {
-  return fetchGateway<GatewayEnvelope>('/api/user/profile', {
-    method: 'POST',
+  return fetchGateway<GatewayEnvelope>('/api/portfolio/profile', {
+    method: 'PUT',
     body: JSON.stringify(data),
   })
 }
