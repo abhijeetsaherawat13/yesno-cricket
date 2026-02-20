@@ -726,7 +726,8 @@ export async function fetchGatewayPortfolioSnapshot(userId: string): Promise<Gat
 
   const payload = await fetchGatewayPortfolio(userId)
   // Handle both success formats: payload.ok OR payload.success
-  if (!payload?.ok && !(payload as Record<string, unknown>)?.success) return null
+  if (!payload) return null
+  if (!payload.ok && !(payload as Record<string, unknown>).success) return null
 
   // Handle both response formats: server-v2 wraps in `portfolio`, legacy has flat structure
   const portfolioWrapper = (payload as Record<string, unknown>).portfolio as Record<string, unknown> | undefined
